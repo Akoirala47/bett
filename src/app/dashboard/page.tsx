@@ -97,10 +97,7 @@ export default function Dashboard() {
     const { data: wt } = await supabase.from('daily_tasks').select('*').eq('user_id', uid).order('date', { ascending: false }).limit(7)
     if (wt) setWeekTasks(wt)
     
-    if (partner) {
-      const { data: pwt } = await supabase.from('daily_tasks').select('*').eq('user_id', partner.id).order('date', { ascending: false }).limit(7)
-      if (pwt) setPartnerWeek(pwt)
-    }
+    // Partner week data is optional for UI; no local state needed here.
     
     setLoading(false)
   }, [supabase, today])
