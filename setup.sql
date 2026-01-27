@@ -21,6 +21,43 @@ CREATE TABLE profiles (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Hard limit: max 2 profiles total
+CREATE OR REPLACE FUNCTION enforce_lobby_limit()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  c INT;
+BEGIN
+  SELECT COUNT(*) INTO c FROM public.profiles;
+  IF c >= 2 THEN
+    RAISE EXCEPTION 'LOBBY_FULL';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_enforce_lobby_limit ON public.profiles;
+CREATE TRIGGER trg_enforce_lobby_limit
+BEFORE INSERT ON public.profiles
+FOR EACH ROW
+EXECUTE FUNCTION enforce_lobby_limit();
+
+-- Allow unauthenticated clients to check if lobby is full (without exposing profile rows)
+CREATE OR REPLACE FUNCTION lobby_status()
+RETURNS TABLE(profile_count INT, is_full BOOLEAN)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT
+    (SELECT COUNT(*) FROM public.profiles)::INT AS profile_count,
+    ((SELECT COUNT(*) FROM public.profiles) >= 2) AS is_full;
+$$;
+
+GRANT EXECUTE ON FUNCTION lobby_status() TO anon, authenticated;
+
 -- ==========================================
 -- 2. SCHEDULES (gym days + calorie goal)
 -- ==========================================

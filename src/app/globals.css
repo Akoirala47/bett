@@ -15,6 +15,12 @@
   --text-muted: #504c48;
   
   --border: rgba(255,255,255,0.08);
+
+  /* Back-compat aliases (used by older components) */
+  --accent-sun: var(--accent);
+  --accent-ember: var(--accent-dim);
+  --text-secondary: var(--text-dim);
+  --danger: #d04040;
 }
 
 * {
@@ -100,12 +106,25 @@ button, a {
   transition: border-color 0.15s;
 }
 
+/* Subtle extra vertical comfort on iOS */
+@supports (-webkit-touch-callout: none) {
+  .input {
+    padding-top: 15px;
+    padding-bottom: 15px;
+  }
+}
+
 .input:focus {
   outline: none;
   border-color: var(--accent);
 }
 
 .input::placeholder { color: var(--text-muted); }
+
+/* Input with left icon (prevents overlap on iOS + desktop) */
+.input-icon-left {
+  padding-left: 44px;
+}
 
 /* Progress */
 .progress-track {

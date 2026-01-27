@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 import { motion } from 'framer-motion'
@@ -13,8 +13,55 @@ export default function AuthPage() {
   const [name, setName] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [lobby, setLobby] = useState<{ profile_count: number; is_full: boolean } | null>(null)
+  const [lobbyLoading, setLobbyLoading] = useState(true)
+  const [redirectedFull, setRedirectedFull] = useState(false)
   const router = useRouter()
   const supabase = createClient()
+
+  const lobbyFull = !!lobby?.is_full
+
+  useEffect(() => {
+    // Avoid useSearchParams() to keep static builds happy
+    if (typeof window !== 'undefined') {
+      const full = new URLSearchParams(window.location.search).get('full') === '1'
+      setRedirectedFull(full)
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      setLobbyLoading(true)
+      const { data, error } = await supabase.rpc('lobby_status')
+      if (!cancelled) {
+        if (error) {
+          // If RPC isn't installed yet, don't hard-block signup; just hide this UX.
+          console.warn('lobby_status RPC not available yet:', error.message)
+          setLobby(null)
+        } else if (Array.isArray(data) && data[0]) {
+          setLobby(data[0])
+        } else {
+          setLobby(null)
+        }
+        setLobbyLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [supabase])
+
+  useEffect(() => {
+    if (redirectedFull) {
+      setError('Sorry — lobby is full. Only 2 accounts are allowed.')
+      setMode('login')
+    }
+  }, [redirectedFull])
+
+  useEffect(() => {
+    if (lobbyFull && mode === 'signup') setMode('login')
+  }, [lobbyFull, mode])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -23,6 +70,9 @@ export default function AuthPage() {
 
     try {
       if (mode === 'signup') {
+        if (lobbyFull) {
+          throw new Error('Sorry — lobby is full. Only 2 accounts are allowed.')
+        }
         const { error } = await supabase.auth.signUp({
           email,
           password,
@@ -51,17 +101,18 @@ export default function AuthPage() {
         className="w-full max-w-sm"
       >
         {/* Logo */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-10">
           <motion.div
             initial={{ scale: 0.8 }}
             animate={{ scale: 1 }}
             transition={{ delay: 0.1, type: 'spring', stiffness: 200 }}
-            className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-[var(--accent-ember)] to-[var(--accent-sun)] mb-4"
+            className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4"
+            style={{ background: 'linear-gradient(135deg, var(--accent-ember), var(--accent-sun))' }}
           >
             <Target className="w-8 h-8 text-[var(--bg-void)]" />
           </motion.div>
-          <h1 className="text-2xl font-bold text-[var(--accent-sun)] mb-1">BETT</h1>
-          <p className="text-sm text-[var(--text-muted)] tracking-wide">BATTLE OF THE GAINS</p>
+          <h1 className="text-2xl font-bold text-[var(--accent-sun)] mb-2">BETT</h1>
+          <p className="text-sm text-[var(--text-muted)] tracking-wide leading-relaxed">BATTLE OF THE GAINS</p>
         </div>
 
         {/* Card */}
@@ -75,15 +126,27 @@ export default function AuthPage() {
               Log In
             </button>
             <button
-              onClick={() => setMode('signup')}
-              className={`flex-1 py-3 text-sm font-medium transition ${mode === 'signup' ? 'text-[var(--accent-sun)] border-b-2 border-[var(--accent-sun)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}`}
+              onClick={() => !lobbyFull && setMode('signup')}
+              disabled={lobbyFull}
+              className={`flex-1 py-3 text-sm font-medium transition ${
+                lobbyFull
+                  ? 'text-[var(--text-muted)] opacity-60 cursor-not-allowed'
+                  : mode === 'signup'
+                    ? 'text-[var(--accent-sun)] border-b-2 border-[var(--accent-sun)]'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+              }`}
             >
-              Sign Up
+              {lobbyFull ? 'Lobby Full' : 'Sign Up'}
             </button>
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <form onSubmit={handleSubmit} className="p-6 space-y-5">
+            {!lobbyLoading && lobbyFull && (
+              <div className="p-3 rounded-lg bg-black/20 border border-[var(--border)] text-sm text-[var(--text-dim)]">
+                Sorry — <span className="text-[var(--text)] font-semibold">lobby is full</span>. Only 2 accounts can exist.
+              </div>
+            )}
             {error && (
               <motion.div
                 initial={{ opacity: 0, height: 0 }}
@@ -101,7 +164,9 @@ export default function AuthPage() {
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
               >
-                <label className="label block mb-1.5">Name</label>
+                <label className="block mb-2 text-xs font-medium tracking-wide text-[var(--text-muted)]">
+                  Name
+                </label>
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
                   <input
@@ -109,7 +174,7 @@ export default function AuthPage() {
                     value={name}
                     onChange={e => setName(e.target.value)}
                     placeholder="Your name"
-                    className="input pl-10"
+                    className="input input-icon-left"
                     required={mode === 'signup'}
                   />
                 </div>
@@ -117,7 +182,9 @@ export default function AuthPage() {
             )}
 
             <div>
-              <label className="label block mb-1.5">Email</label>
+              <label className="block mb-2 text-xs font-medium tracking-wide text-[var(--text-muted)]">
+                Email
+              </label>
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
                 <input
@@ -125,14 +192,16 @@ export default function AuthPage() {
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   placeholder="you@email.com"
-                  className="input pl-10"
+                  className="input input-icon-left"
                   required
                 />
               </div>
             </div>
 
             <div>
-              <label className="label block mb-1.5">Password</label>
+              <label className="block mb-2 text-xs font-medium tracking-wide text-[var(--text-muted)]">
+                Password
+              </label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
                 <input
@@ -140,14 +209,18 @@ export default function AuthPage() {
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="input pl-10"
+                  className="input input-icon-left"
                   required
                   minLength={6}
                 />
               </div>
             </div>
 
-            <button type="submit" disabled={loading} className="btn btn-primary w-full mt-2">
+            <button
+              type="submit"
+              disabled={loading || (mode === 'signup' && lobbyFull)}
+              className="btn btn-primary w-full mt-4"
+            >
               {loading ? (
                 <span className="flex items-center gap-2">
                   <span className="w-4 h-4 border-2 border-[var(--bg-void)] border-t-transparent rounded-full animate-spin" />

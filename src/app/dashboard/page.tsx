@@ -54,11 +54,28 @@ export default function Dashboard() {
     setTimeout(() => setNotification(null), 3000)
   }, [])
 
-  const load = useCallback(async (uid: string) => {
+  const load = async (uid: string) => {
     let { data: p } = await supabase.from('profiles').select('*').eq('id', uid).single()
     if (!p) {
       const { data: { user: au } } = await supabase.auth.getUser()
-      const { data: np } = await supabase.from('profiles').insert({ id: uid, email: au?.email || '', display_name: au?.user_metadata?.display_name || au?.email?.split('@')[0] || 'User' }).select().single()
+      const { data: np, error: profileInsertError } = await supabase
+        .from('profiles')
+        .insert({
+          id: uid,
+          email: au?.email || '',
+          display_name: au?.user_metadata?.display_name || au?.email?.split('@')[0] || 'User',
+        })
+        .select()
+        .single()
+
+      if (profileInsertError) {
+        // If a 3rd account somehow exists, force logout and show lobby-full screen.
+        console.error('Profile insert failed:', profileInsertError.message)
+        await supabase.auth.signOut()
+        router.push('/?full=1')
+        return
+      }
+
       p = np
     }
     if (p) setUser(p)
@@ -100,14 +117,25 @@ export default function Dashboard() {
     // Partner week data is optional for UI; no local state needed here.
     
     setLoading(false)
-  }, [supabase, today])
+  }
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) router.push('/')
-      else load(user.id)
-    })
-  }, [supabase, router, load])
+    let cancelled = false
+    ;(async () => {
+      const { data: { user: authUser } } = await supabase.auth.getUser()
+      if (!authUser) {
+        router.push('/')
+        return
+      }
+      if (!cancelled) {
+        await load(authUser.id)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supabase, router, today])
 
   useEffect(() => {
     if (!user || !partner) return
