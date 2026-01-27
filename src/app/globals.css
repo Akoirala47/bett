@@ -49,11 +49,7 @@
   --danger: #ef4444;
 }
 
-@font-face {
-  font-family: 'Inter';
-  src: url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-  font-display: swap;
-}
+/* Font loaded via next/font/google in layout.tsx */
 
 /* Base Reset & Typography */
 body {
@@ -175,43 +171,7 @@ body {
   animation: pulse-glow 3s ease-in-out infinite;
 }
 
-/* Stars */
-.star-field {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.star {
-  position: absolute;
-  background: white;
-  border-radius: 50%;
-  animation: twinkle 4s ease-in-out infinite;
-  opacity: 0.3;
-}
-
-@keyframes twinkle {
-
-  0%,
-  100% {
-    opacity: 0.1;
-    transform: scale(0.8);
-  }
-
-  50% {
-    opacity: 0.8;
-    transform: scale(1.2);
-  }
-}
-
-.star:nth-child(odd) {
-  animation-delay: 1s;
-}
-
-.star:nth-child(3n) {
-  animation-duration: 3s;
-}
+/* Stars - now handled via inline gradient in StarField.tsx */
 
 /* --- ADAPTERS FOR DASHBOARD (Legacy Classes Refactored) --- */
 

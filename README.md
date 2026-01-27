@@ -1,118 +1,98 @@
-# BETT - Battle of the Gains
+# BETT
 
-A beautiful 2-player goal tracking app with Outer Wilds ship log aesthetics. Built with Next.js, Supabase, and Gemini AI.
+A premium 2-player fitness accountability app. Track sprints, compete with your rival, and put money on the line.
 
 ## Features
 
-- **Email/Password Authentication** - Each player creates their own account
-- **Sprint-Based Goals** - 2-week sprints with money on the line
-- **Week Tracking** - Visual indicator showing Week 1 or Week 2 of the sprint
-- **Daily Check-ins** - Log your day with AI-powered diary generation (Gemini)
-- **Rival Peek Panel** - Slide out to view your partner's progress (view only)
-- **Real-time Sync** - See updates as they happen
-- **Beautiful Ship Log UI** - Outer Wilds inspired design with space vibes
-
-## How It Works
-
-### The Sprint Cycle
-1. **Create a Sprint Goal** - Set your 2-week goal (e.g., "Reach 122 lbs")
-2. **Put Money on the Line** - Each player puts $ in the pot (starts at $25)
-3. **Daily Check-ins** - Log weight, mood, and get AI-generated diary entries
-4. **End of Sprint** - After 2 weeks, determine winners:
-   - **Both Win**: +$10 bonus added to pot, continues
-   - **One Loses**: Loser Venmos winner the pot, reset
-   - **Both Lose**: Pot carries over, shame on you both
-
-### Daily Check-ins
-1. Enter your current weight (optional)
-2. Select your mood
-3. Describe your schedule/plans
-4. Click "Generate Diary Entry" - Gemini AI creates a beautiful journal entry
-5. Edit if needed, then save
-
-## Setup
-
-### 1. Install Dependencies
-
-```bash
-cd bett
-npm install
-```
-
-### 2. Set Up Supabase Database
-
-1. Go to your Supabase project: https://supabase.com/dashboard/project/mbgwzkphnkssfjwnznmu
-2. Navigate to **SQL Editor** in the left sidebar
-3. Click **New Query**
-4. Copy and paste the entire contents of `setup.sql`
-5. Click **Run** (Cmd/Ctrl + Enter)
-
-This creates all necessary tables with proper RLS policies and real-time enabled.
-
-### 3. Configure Environment
-
-The `.env.local` file is already set up with your credentials:
-- Supabase URL and anon key
-- Gemini API key
-
-### 4. Run the App
-
-```bash
-npm run dev
-```
-
-Visit **http://localhost:3000**
-
-## Deployment (Vercel)
-
-1. Push to GitHub
-2. Connect repo to Vercel
-3. Add environment variables in Vercel dashboard:
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - `GEMINI_API_KEY`
-4. Deploy!
+- **2-Player Only** — Exclusive lobby for you and your accountability partner
+- **Sprint Goals** — 14-day challenges with real money stakes
+- **Daily Tracking** — Log gym sessions, calories, and weight
+- **Rival Peek** — Slide-out panel to spy on your partner's progress
+- **Sprint Planning** — Schedule your next sprint 2 days before the current one ends
+- **Real-time Sync** — See updates as they happen
+- **iOS Web App** — Add to Home Screen for native app feel
 
 ## Tech Stack
 
-- **Next.js 15** - React framework with App Router
-- **Supabase** - Auth, Database, Real-time subscriptions
-- **Gemini AI** - Diary entry generation
-- **Tailwind CSS** - Styling
-- **Framer Motion** - Animations
-- **Zustand** - State management
-- **date-fns** - Date utilities
+- **Next.js 16** — React 19 with App Router
+- **Supabase** — Auth, Postgres DB, Real-time subscriptions
+- **Tailwind CSS v4** — Modern styling with `@theme` and `@apply`
+- **Framer Motion** — Smooth animations
+- **Zustand** — Lightweight state management
 
-## Design Philosophy
+## Quick Start
 
-Inspired by **Outer Wilds' Ship Log**:
-- Dark space background with twinkling stars
-- Warm orange/amber accents (like the sun)
-- Teal/cyan for discoveries and progress
-- Sketch-like borders and connections
-- Quest/exploration terminology
-- Mystery and discovery vibes
+```bash
+# Install
+npm install
 
-## File Structure
+# Run locally
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000)
+
+## Environment Variables
+
+Create `.env.local`:
+
+```env
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
+
+## Database Setup
+
+Run these SQL files in your Supabase SQL Editor (in order):
+
+1. `setup.sql` — Creates tables, RLS policies, and functions
+2. `migration.sql` — Adds `start_value` column for relative progress
+
+### Optional Reset
+
+- `reset_game.sql` — Wipes daily tasks and resets sprints to Jan 24
+- `fix_progress.sql` — Patches `start_value` for existing sprints
+
+## Deploy to Vercel
+
+1. Push to GitHub
+2. Import repo in Vercel
+3. Add environment variables
+4. Deploy
+
+## iOS Installation
+
+1. Open the deployed URL in Safari
+2. Tap Share → "Add to Home Screen"
+3. Launch from Home Screen for full-screen experience
+
+## Project Structure
 
 ```
-bett/
-├── src/
-│   ├── app/
-│   │   ├── api/gemini/route.ts    # Gemini API endpoint
-│   │   ├── dashboard/page.tsx     # Main dashboard
-│   │   ├── globals.css            # Ship log styles
-│   │   ├── layout.tsx             # Root layout with stars
-│   │   └── page.tsx               # Auth page
-│   └── lib/
-│       ├── supabase.ts            # Supabase client & types
-│       ├── gemini.ts              # Gemini helper
-│       └── store.ts               # Zustand store
-├── setup.sql                       # Database setup
-├── .env.local                      # Environment variables
-└── README.md
+src/
+├── app/
+│   ├── dashboard/page.tsx   # Main dashboard
+│   ├── globals.css          # Design system
+│   ├── layout.tsx           # Root layout + fonts
+│   ├── manifest.ts          # PWA manifest
+│   └── page.tsx             # Auth page
+├── components/
+│   ├── AuthForm.tsx         # Login/signup form
+│   ├── StarField.tsx        # Background stars (CSS)
+│   └── ui/                  # Button, Input, Card
+└── lib/
+    ├── supabase.ts          # Supabase client
+    ├── utils.ts             # cn() helper
+    └── store.ts             # Zustand store
 ```
+
+## Sprint Logic
+
+- **Progress**: `(current - start) / (target - start) * 100`
+- **Planning Mode**: Appears when ≤2 days left in sprint
+- **Continuous Cycles**: Next sprint starts day after current ends
+- **Status**: `active` → `completed`, `pending` → `active`
 
 ---
 
-*"The universe is, and we are."* - Outer Wilds
+Built for gains. No excuses.
