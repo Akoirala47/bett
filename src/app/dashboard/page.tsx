@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Target, Calendar, ChevronLeft,
   CheckCircle, Circle, X, LogOut, Settings,
-  Dumbbell, Flame, Bell, Scale, TrendingUp, Zap
+  Dumbbell, Flame, Bell, Scale, TrendingUp, Zap, Home, User
 } from 'lucide-react'
 import { format, differenceInDays, addDays } from 'date-fns'
 
@@ -34,12 +34,14 @@ export default function Dashboard() {
   const [todayTask, setTodayTask] = useState<DailyTask | null>(null)
   const [partnerTask, setPartnerTask] = useState<DailyTask | null>(null)
   const [weekTasks, setWeekTasks] = useState<DailyTask[]>([])
+  const [allTasks, setAllTasks] = useState<DailyTask[]>([])
   const [partnerWeekTasks, setPartnerWeekTasks] = useState<DailyTask[]>([])
   const [gameState, setGameState] = useState<GameState | null>(null)
   const [loading, setLoading] = useState(true)
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'you'>('dashboard')
   const [peekOpen, setPeekOpen] = useState(false)
   const [notification, setNotification] = useState<string | null>(null)
-  const [modal, setModal] = useState<'schedule' | 'sprint' | 'weight' | 'edit-day' | 'planning' | null>(null)
+  const [modal, setModal] = useState<'schedule' | 'sprint' | 'weight' | 'edit-day' | 'planning' | 'settings' | null>(null)
   const [editingDate, setEditingDate] = useState<string | null>(null)
   const [editGym, setEditGym] = useState(false)
   const [editCalories, setEditCalories] = useState(false)
@@ -61,6 +63,7 @@ export default function Dashboard() {
   }, [])
 
   const load = async (uid: string) => {
+    // First: Get user profile (required for everything else)
     let { data: p } = await supabase.from('profiles').select('*').eq('id', uid).single()
     if (!p) {
       const { data: { user: au } } = await supabase.auth.getUser()
@@ -75,79 +78,94 @@ export default function Dashboard() {
         .single()
 
       if (profileInsertError) {
-        // If a 3rd account somehow exists, force logout and show lobby-full screen.
         console.error('Profile insert failed:', profileInsertError.message)
         await supabase.auth.signOut()
         router.push('/?full=1')
         return
       }
-
       p = np
     }
     if (p) setUser(p)
 
-    const { data: partner } = await supabase.from('profiles').select('*').neq('id', uid).limit(1).single()
-    if (partner) setPartner(partner)
+    // Parallel batch 1: All independent queries
+    const [
+      partnerRes,
+      gameStateRes,
+      scheduleRes,
+      sprintRes,
+      pendingSprintRes,
+      todayTaskRes,
+      weekTasksRes,
+      allTasksRes
+    ] = await Promise.all([
+      supabase.from('profiles').select('*').neq('id', uid).limit(1).single(),
+      supabase.from('game_state').select('*').eq('id', 1).single(),
+      supabase.from('schedules').select('*').eq('user_id', uid).single(),
+      supabase.from('sprints').select('*').eq('user_id', uid).eq('status', 'active').limit(1).single(),
+      supabase.from('sprints').select('*').eq('user_id', uid).eq('status', 'pending').order('start_date', { ascending: true }).limit(1).single(),
+      supabase.from('daily_tasks').select('*').eq('user_id', uid).eq('date', today).single(),
+      supabase.from('daily_tasks').select('*').eq('user_id', uid).order('date', { ascending: false }).limit(7),
+      supabase.from('daily_tasks').select('*').eq('user_id', uid).order('date', { ascending: false }).limit(30)
+    ])
 
-    let { data: gs } = await supabase.from('game_state').select('*').eq('id', 1).single()
-    if (!gs) { const { data: ngs } = await supabase.from('game_state').insert({ id: 1, current_sprint: 1, pot_amount: 0 }).select().single(); gs = ngs }
+    const partnerData = partnerRes.data
+    if (partnerData) setPartner(partnerData)
+
+    // Game state
+    let gs = gameStateRes.data
+    if (!gs) {
+      const { data: ngs } = await supabase.from('game_state').insert({ id: 1, current_sprint: 1, pot_amount: 0 }).select().single()
+      gs = ngs
+    }
     if (gs) setGameState(gs)
 
-    const { data: sch } = await supabase.from('schedules').select('*').eq('user_id', uid).single()
+    // Schedule
+    const sch = scheduleRes.data
     if (sch) { setSchedule(sch); setGymDays(sch.gym_days || []); setCalorieGoal(sch.calorie_goal?.toString() || '') }
 
-    if (partner) {
-      const { data: ps } = await supabase.from('schedules').select('*').eq('user_id', partner.id).single()
-      if (ps) setPartnerSchedule(ps)
-    }
+    // Sprint logic
+    const sp = sprintRes.data
+    const pendingSprint = pendingSprintRes.data
 
-    const { data: sp } = await supabase.from('sprints').select('*').eq('user_id', uid).eq('status', 'active').limit(1).single()
     if (sp) {
-      // Check if expired
       if (new Date(sp.end_date) < new Date()) {
         await supabase.from('sprints').update({ status: 'completed' }).eq('id', sp.id)
         setSprint(null)
-        // Check for pending
-        const { data: pending } = await supabase.from('sprints').select('*').eq('user_id', uid).eq('status', 'pending').order('start_date', { ascending: true }).limit(1).single()
-        if (pending && new Date(pending.start_date) <= new Date()) {
-          const { data: activated } = await supabase.from('sprints').update({ status: 'active' }).eq('id', pending.id).select().single()
+        if (pendingSprint && new Date(pendingSprint.start_date) <= new Date()) {
+          const { data: activated } = await supabase.from('sprints').update({ status: 'active' }).eq('id', pendingSprint.id).select().single()
           if (activated) setSprint(activated)
         }
       } else {
         setSprint(sp)
-        // Check if next sprint exists
-        const { data: ns } = await supabase.from('sprints').select('*').eq('user_id', uid).eq('status', 'pending').limit(1).single()
-        if (ns) setNextSprint(ns)
+        if (pendingSprint) setNextSprint(pendingSprint)
       }
-    } else {
-      // No active sprint, check for pending that should be active
-      const { data: pending } = await supabase.from('sprints').select('*').eq('user_id', uid).eq('status', 'pending').order('start_date', { ascending: true }).limit(1).single()
-      if (pending && new Date(pending.start_date) <= new Date()) {
-        const { data: activated } = await supabase.from('sprints').update({ status: 'active' }).eq('id', pending.id).select().single()
-        if (activated) setSprint(activated)
-      }
+    } else if (pendingSprint && new Date(pendingSprint.start_date) <= new Date()) {
+      const { data: activated } = await supabase.from('sprints').update({ status: 'active' }).eq('id', pendingSprint.id).select().single()
+      if (activated) setSprint(activated)
     }
 
-    if (partner) {
-      const { data: psp } = await supabase.from('sprints').select('*').eq('user_id', partner.id).eq('status', 'active').limit(1).single()
-      if (psp) setPartnerSprint(psp)
-    }
+    // Today's task
+    if (todayTaskRes.data) setTodayTask(todayTaskRes.data)
 
-    const { data: tt } = await supabase.from('daily_tasks').select('*').eq('user_id', uid).eq('date', today).single()
-    if (tt) setTodayTask(tt)
+    // Week tasks
+    if (weekTasksRes.data) setWeekTasks(weekTasksRes.data)
 
-    if (partner) {
-      const { data: pt } = await supabase.from('daily_tasks').select('*').eq('user_id', partner.id).eq('date', today).single()
-      if (pt) setPartnerTask(pt)
-    }
+    // All tasks for graphs (new)
+    if (allTasksRes.data) setAllTasks(allTasksRes.data)
 
-    const { data: wt } = await supabase.from('daily_tasks').select('*').eq('user_id', uid).order('date', { ascending: false }).limit(7)
-    if (wt) setWeekTasks(wt)
+    // Partner data (parallel)
+    if (partnerData) {
+      const [partnerScheduleRes, partnerSprintRes, partnerTodayRes, partnerWeekRes] = await Promise.all([
+        supabase.from('schedules').select('*').eq('user_id', partnerData.id).single(),
+        supabase.from('sprints').select('*').eq('user_id', partnerData.id).eq('status', 'active').limit(1).single(),
+        supabase.from('daily_tasks').select('*').eq('user_id', partnerData.id).eq('date', today).single(),
+        supabase.from('daily_tasks').select('*').eq('user_id', partnerData.id).order('date', { ascending: false }).limit(14)
+      ])
 
-    // Partner week data for rival panel stats
-    if (partner) {
-      const { data: pwt } = await supabase.from('daily_tasks').select('*').eq('user_id', partner.id).order('date', { ascending: false }).limit(14)
-      if (pwt) setPartnerWeekTasks(pwt)
+      if (partnerScheduleRes.data) setPartnerSchedule(partnerScheduleRes.data)
+      if (partnerSprintRes.data) setPartnerSprint(partnerSprintRes.data)
+      if (partnerTodayRes.data) setPartnerTask(partnerTodayRes.data)
+      if (partnerWeekRes.data) setPartnerWeekTasks(partnerWeekRes.data)
     }
 
     setLoading(false)
@@ -396,150 +414,272 @@ export default function Dashboard() {
           <span className="text-xl font-bold text-[var(--accent)]">BETT</span>
           {gameState && gameState.pot_amount > 0 && <span className="text-[var(--accent)] font-semibold">${gameState.pot_amount}</span>}
           <div className="flex items-center gap-3">
-            <span className="text-[var(--text-dim)]">{user?.display_name}</span>
-            <button onClick={() => supabase.auth.signOut().then(() => router.push('/'))} className="p-2 hover:bg-[var(--bg-hover)] rounded-full">
-              <LogOut className="w-5 h-5 text-[var(--text-muted)]" />
+            <button onClick={() => setModal('settings')} className="text-[var(--text-dim)] hover:text-[var(--text)] transition-colors">
+              {user?.display_name}
             </button>
           </div>
         </div>
       </header>
 
-      <main
-        className="container py-10 space-y-8"
-        style={{ paddingBottom: 'calc(56px + env(safe-area-inset-bottom))' }}
-      >
-        {/* Today */}
-        <section className="card">
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h1 className="text-2xl font-bold">{format(new Date(), 'EEEE')}</h1>
-              <p className="text-[var(--text-dim)] mt-1">{format(new Date(), 'MMMM d, yyyy')}</p>
-            </div>
-            <button onClick={() => setModal('schedule')} className="p-3 hover:bg-[var(--bg-hover)] rounded-full">
-              <Settings className="w-5 h-5 text-[var(--text-muted)]" />
-            </button>
-          </div>
-
-          {schedule ? (
-            <div className="space-y-3">
-              {isGymDay && (
-                <button onClick={() => toggle('gym')} className={`task-btn ${todayTask?.gym_completed ? 'done' : ''}`}>
-                  {todayTask?.gym_completed ? <CheckCircle className="w-6 h-6 text-[var(--teal)]" /> : <Circle className="w-6 h-6 text-[var(--text-muted)]" />}
-                  <Dumbbell className="w-5 h-5 text-[var(--teal)]" />
-                  <span className="text-lg font-medium">Hit the gym</span>
-                </button>
-              )}
-
-              {hasCal && (
-                <button onClick={() => toggle('calories')} className={`task-btn ${todayTask?.calories_completed ? 'done-accent' : ''}`}>
-                  {todayTask?.calories_completed ? <CheckCircle className="w-6 h-6 text-[var(--accent)]" /> : <Circle className="w-6 h-6 text-[var(--text-muted)]" />}
-                  <Flame className="w-5 h-5 text-[var(--accent)]" />
-                  <span className="text-lg font-medium">{schedule.calorie_goal?.toLocaleString()} calories</span>
-                </button>
-              )}
-
-              <button onClick={() => setModal('weight')} className="task-btn">
-                <Scale className="w-6 h-6 text-[var(--text-muted)]" />
-                <span className={`text-lg ${todayTask?.weight ? 'font-medium' : 'text-[var(--text-muted)]'}`}>
-                  {todayTask?.weight ? `${todayTask.weight} lbs` : 'Log weight'}
-                </span>
-              </button>
-
-              {!isGymDay && !hasCal && (
-                <p className="text-center text-[var(--text-dim)] py-4 text-lg">Rest day</p>
-              )}
-            </div>
-          ) : (
-            <button onClick={() => setModal('schedule')} className="w-full py-12 text-center">
-              <Calendar className="w-12 h-12 mx-auto mb-4 text-[var(--text-muted)]" />
-              <p className="text-lg text-[var(--text-dim)]">Set up your schedule</p>
-            </button>
-          )}
-        </section>
-
-        {/* Week */}
-        <section className="week-scroll-container my-6">
-          <div className="week-grid">
-            {Array.from({ length: 7 }, (_, i) => {
-              const d = addDays(new Date(), -6 + i)
-              const ds = format(d, 'yyyy-MM-dd')
-              const task = weekTasks.find(t => t.date === ds)
-              const isToday = ds === today
-              const gymDay = schedule?.gym_days?.includes(d.getDay())
-
-              return (
-                <button
-                  key={i}
-                  onClick={() => openEditDay(ds)}
-                  className={`week-day ${isToday ? 'today' : ''}`}
-                >
-                  <p className="text-xs text-[var(--text-muted)] mb-1">{DAYS[d.getDay()]}</p>
-                  <p className="text-lg font-semibold mb-2">{format(d, 'd')}</p>
-                  <div className="flex justify-center gap-1">
-                    {gymDay && <div className={`w-3 h-3 rounded-full ${task?.gym_completed ? 'bg-[var(--teal)]' : 'bg-[var(--border)]'}`} />}
-                    {hasCal && <div className={`w-3 h-3 rounded-full ${task?.calories_completed ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'}`} />}
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-        </section>
-
-        {/* Sprint */}
-        {sprint ? (
-          <section className="card-accent">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <h2 className="text-xl font-bold">{sprint.goal_title}</h2>
-                <p className="text-[var(--text-dim)] mt-1">{daysLeft} days left</p>
-              </div>
-              <span className="text-xl font-bold text-[var(--accent)]">${sprint.money_on_line}</span>
-            </div>
-            <div className="flex items-center gap-4">
-              <div className="flex-1 progress-track">
-                <div className="progress-fill" style={{ width: `${progress}%` }} />
-              </div>
-              <span className="text-lg font-medium text-[var(--text-dim)]">{sprint.current_value || 0}/{sprint.target_value}</span>
-            </div>
-          </section>
-        ) : (
+      {activeTab === 'dashboard' ? (
+        <main
+          className="container py-10 space-y-8"
+          style={{ paddingBottom: 'calc(80px + env(safe-area-inset-bottom))' }}
+        >
+          {/* Today */}
           <section className="card">
-            <button onClick={() => setModal('sprint')} className="w-full py-8 text-center">
-              <Target className="w-12 h-12 mx-auto mb-4 text-[var(--text-muted)]" />
-              <p className="text-lg text-[var(--text-dim)]">Create a sprint goal</p>
-            </button>
-          </section>
-        )}
-
-        {/* Sprint Planning Prompt */}
-        {sprint && daysLeft <= 2 && !nextSprint && (
-          <section className="card border border-[var(--accent)]/50 relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-1 bg-[var(--accent)] h-full" />
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between mb-6">
               <div>
-                <h2 className="text-xl font-bold text-[var(--accent)]">Sprint Planning</h2>
-                <p className="text-[var(--text-dim)] mt-1">Time to lock in your next 2-week goal.</p>
+                <h1 className="text-2xl font-bold">{format(new Date(), 'EEEE')}</h1>
+                <p className="text-[var(--text-dim)] mt-1">{format(new Date(), 'MMMM d, yyyy')}</p>
               </div>
-              <button onClick={() => setModal('planning')} className="btn btn-primary px-6">
-                Plan Next
+              <button onClick={() => setModal('schedule')} className="p-3 hover:bg-[var(--bg-hover)] rounded-full">
+                <Settings className="w-5 h-5 text-[var(--text-muted)]" />
               </button>
             </div>
-          </section>
-        )}
 
-        {nextSprint && (
-          <section className="p-4 rounded-xl border border-[var(--border)] bg-[var(--bg-card)]/50 flex items-center justify-between">
-            <div>
-              <p className="text-xs text-[var(--text-dim)] uppercase tracking-wide">Up Next</p>
-              <p className="font-semibold">{nextSprint.goal_title}</p>
-              <p className="text-xs text-[var(--text-muted)]">Starts {format(new Date(nextSprint.start_date), 'MMM d')}</p>
-            </div>
-            <div className="px-3 py-1 rounded bg-[var(--bg-layer-1)] text-xs text-[var(--text-dim)]">
-              Locked
+            {schedule ? (
+              <div className="space-y-3">
+                {isGymDay && (
+                  <button onClick={() => toggle('gym')} className={`task-btn ${todayTask?.gym_completed ? 'done' : ''}`}>
+                    {todayTask?.gym_completed ? <CheckCircle className="w-6 h-6 text-[var(--teal)]" /> : <Circle className="w-6 h-6 text-[var(--text-muted)]" />}
+                    <Dumbbell className="w-5 h-5 text-[var(--teal)]" />
+                    <span className="text-lg font-medium">Hit the gym</span>
+                  </button>
+                )}
+
+                {hasCal && (
+                  <button onClick={() => toggle('calories')} className={`task-btn ${todayTask?.calories_completed ? 'done-accent' : ''}`}>
+                    {todayTask?.calories_completed ? <CheckCircle className="w-6 h-6 text-[var(--accent)]" /> : <Circle className="w-6 h-6 text-[var(--text-muted)]" />}
+                    <Flame className="w-5 h-5 text-[var(--accent)]" />
+                    <span className="text-lg font-medium">{schedule.calorie_goal?.toLocaleString()} calories</span>
+                  </button>
+                )}
+
+                <button onClick={() => setModal('weight')} className="task-btn">
+                  <Scale className="w-6 h-6 text-[var(--text-muted)]" />
+                  <span className={`text-lg ${todayTask?.weight ? 'font-medium' : 'text-[var(--text-muted)]'}`}>
+                    {todayTask?.weight ? `${todayTask.weight} lbs` : 'Log weight'}
+                  </span>
+                </button>
+
+                {!isGymDay && !hasCal && (
+                  <p className="text-center text-[var(--text-dim)] py-4 text-lg">Rest day</p>
+                )}
+              </div>
+            ) : (
+              <button onClick={() => setModal('schedule')} className="w-full py-12 text-center">
+                <Calendar className="w-12 h-12 mx-auto mb-4 text-[var(--text-muted)]" />
+                <p className="text-lg text-[var(--text-dim)]">Set up your schedule</p>
+              </button>
+            )}
+          </section>
+
+          {/* Week */}
+          <section className="week-scroll-container my-6">
+            <div className="week-grid">
+              {Array.from({ length: 7 }, (_, i) => {
+                const d = addDays(new Date(), -6 + i)
+                const ds = format(d, 'yyyy-MM-dd')
+                const task = weekTasks.find(t => t.date === ds)
+                const isToday = ds === today
+                const gymDay = schedule?.gym_days?.includes(d.getDay())
+
+                return (
+                  <button
+                    key={i}
+                    onClick={() => openEditDay(ds)}
+                    className={`week-day ${isToday ? 'today' : ''}`}
+                  >
+                    <p className="text-xs text-[var(--text-muted)] mb-1">{DAYS[d.getDay()]}</p>
+                    <p className="text-lg font-semibold mb-2">{format(d, 'd')}</p>
+                    <div className="flex justify-center gap-1">
+                      {gymDay && <div className={`w-3 h-3 rounded-full ${task?.gym_completed ? 'bg-[var(--teal)]' : 'bg-[var(--border)]'}`} />}
+                      {hasCal && <div className={`w-3 h-3 rounded-full ${task?.calories_completed ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'}`} />}
+                    </div>
+                  </button>
+                )
+              })}
             </div>
           </section>
-        )}
-      </main>
+
+          {/* Sprint */}
+          {sprint ? (
+            <section className="card-accent">
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <h2 className="text-xl font-bold">{sprint.goal_title}</h2>
+                  <p className="text-[var(--text-dim)] mt-1">{daysLeft} days left</p>
+                </div>
+                <span className="text-xl font-bold text-[var(--accent)]">${sprint.money_on_line}</span>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="flex-1 progress-track">
+                  <div className="progress-fill" style={{ width: `${progress}%` }} />
+                </div>
+                <span className="text-lg font-medium text-[var(--text-dim)]">{sprint.current_value || 0}/{sprint.target_value}</span>
+              </div>
+            </section>
+          ) : (
+            <section className="card">
+              <button onClick={() => setModal('sprint')} className="w-full py-8 text-center">
+                <Target className="w-12 h-12 mx-auto mb-4 text-[var(--text-muted)]" />
+                <p className="text-lg text-[var(--text-dim)]">Create a sprint goal</p>
+              </button>
+            </section>
+          )}
+
+          {/* Sprint Planning Prompt */}
+          {sprint && daysLeft <= 2 && !nextSprint && (
+            <section className="card border border-[var(--accent)]/50 relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-1 bg-[var(--accent)] h-full" />
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-[var(--accent)]">Sprint Planning</h2>
+                  <p className="text-[var(--text-dim)] mt-1">Time to lock in your next 2-week goal.</p>
+                </div>
+                <button onClick={() => setModal('planning')} className="btn btn-primary px-6">
+                  Plan Next
+                </button>
+              </div>
+            </section>
+          )}
+
+          {nextSprint && (
+            <section className="p-4 rounded-xl border border-[var(--border)] bg-[var(--bg-card)]/50 flex items-center justify-between">
+              <div>
+                <p className="text-xs text-[var(--text-dim)] uppercase tracking-wide">Up Next</p>
+                <p className="font-semibold">{nextSprint.goal_title}</p>
+                <p className="text-xs text-[var(--text-muted)]">Starts {format(new Date(nextSprint.start_date), 'MMM d')}</p>
+              </div>
+              <div className="px-3 py-1 rounded bg-[var(--bg-layer-1)] text-xs text-[var(--text-dim)]">
+                Locked
+              </div>
+            </section>
+          )}
+        </main>
+      ) : (
+        /* You Tab */
+        <main
+          className="container py-10 space-y-8"
+          style={{ paddingBottom: 'calc(80px + env(safe-area-inset-bottom))' }}
+        >
+          <section className="card">
+            <h1 className="text-2xl font-bold mb-6">Your Stats</h1>
+
+            {/* Stats Grid */}
+            <div className="grid grid-cols-2 gap-4 mb-8">
+              {(() => {
+                const last7Days: string[] = []
+                for (let i = 0; i < 7; i++) {
+                  last7Days.push(format(addDays(new Date(), -i), 'yyyy-MM-dd'))
+                }
+                const last7Tasks = allTasks.filter(t => last7Days.includes(t.date))
+                const gymCount = last7Tasks.filter(t => t.gym_completed).length
+                let scheduledGymDays = 0
+                if (schedule?.gym_days) {
+                  for (let i = 0; i < 7; i++) {
+                    const d = addDays(new Date(), -i)
+                    if (schedule.gym_days.includes(d.getDay())) scheduledGymDays++
+                  }
+                }
+
+                // Calorie streak
+                let calorieStreak = 0
+                const sortedTasks = [...allTasks].sort((a, b) => b.date.localeCompare(a.date))
+                for (const task of sortedTasks) {
+                  if (task.calories_completed) calorieStreak++
+                  else break
+                }
+
+                // Gym streak
+                let gymStreak = 0
+                for (const task of sortedTasks) {
+                  if (task.gym_completed) gymStreak++
+                  else break
+                }
+
+                return (
+                  <>
+                    <div className="stat-card">
+                      <Dumbbell className="w-6 h-6 text-[var(--teal)] mb-2 mx-auto" />
+                      <p className="text-3xl font-bold">{gymCount}<span className="text-sm text-[var(--text-dim)]">/{scheduledGymDays}</span></p>
+                      <p className="text-xs text-[var(--text-dim)]">Gym this week</p>
+                    </div>
+                    <div className="stat-card">
+                      <Zap className="w-6 h-6 text-[var(--accent)] mb-2 mx-auto" />
+                      <p className="text-3xl font-bold">{calorieStreak}</p>
+                      <p className="text-xs text-[var(--text-dim)]">Calorie streak</p>
+                    </div>
+                    <div className="stat-card">
+                      <TrendingUp className="w-6 h-6 text-[var(--teal)] mb-2 mx-auto" />
+                      <p className="text-3xl font-bold">{gymStreak}</p>
+                      <p className="text-xs text-[var(--text-dim)]">Gym streak</p>
+                    </div>
+                    <div className="stat-card">
+                      <Scale className="w-6 h-6 text-[var(--text-dim)] mb-2 mx-auto" />
+                      <p className="text-3xl font-bold">{todayTask?.weight || '—'}</p>
+                      <p className="text-xs text-[var(--text-dim)]">Current weight</p>
+                    </div>
+                  </>
+                )
+              })()}
+            </div>
+
+            {/* Weight Graph */}
+            <div>
+              <h2 className="text-lg font-semibold mb-4">Weight Trend</h2>
+              <div className="h-40 flex items-end gap-1">
+                {(() => {
+                  const weightData = allTasks.filter(t => t.weight).slice(0, 14).reverse()
+                  if (weightData.length < 2) return <p className="text-[var(--text-dim)] text-sm w-full text-center py-12">Log more weight data to see trends</p>
+
+                  const weights = weightData.map(t => t.weight!)
+                  const min = Math.min(...weights) - 2
+                  const max = Math.max(...weights) + 2
+                  const range = max - min || 1
+
+                  return weightData.map((t, i) => {
+                    const height = ((t.weight! - min) / range) * 100
+                    return (
+                      <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                        <div
+                          className="w-full bg-[var(--accent)] rounded-t"
+                          style={{ height: `${Math.max(8, height)}%` }}
+                        />
+                        <span className="text-[8px] text-[var(--text-muted)]">{format(new Date(t.date), 'd')}</span>
+                      </div>
+                    )
+                  })
+                })()}
+              </div>
+            </div>
+          </section>
+        </main>
+      )}
+
+      {/* Bottom Tab Bar */}
+      <nav
+        className="fixed bottom-0 left-0 right-0 bg-[var(--bg-layer-1)] border-t border-[var(--border)] z-40"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+      >
+        <div className="flex">
+          <button
+            onClick={() => setActiveTab('dashboard')}
+            className={`flex-1 flex flex-col items-center py-3 gap-1 transition-colors ${activeTab === 'dashboard' ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}`}
+          >
+            <Home className="w-6 h-6" />
+            <span className="text-xs">Home</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('you')}
+            className={`flex-1 flex flex-col items-center py-3 gap-1 transition-colors ${activeTab === 'you' ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}`}
+          >
+            <User className="w-6 h-6" />
+            <span className="text-xs">You</span>
+          </button>
+        </div>
+      </nav>
 
       {/* Floating Rival Button */}
       {!peekOpen && (
@@ -672,7 +812,7 @@ export default function Dashboard() {
             <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="modal" onClick={e => e.stopPropagation()}>
               <div className="modal-header">
                 <h3 className="text-lg font-semibold">
-                  {modal === 'schedule' ? 'Schedule' : modal === 'sprint' ? 'New Sprint' : modal === 'edit-day' ? 'Edit Day' : 'Log Weight'}
+                  {modal === 'schedule' ? 'Schedule' : modal === 'sprint' ? 'New Sprint' : modal === 'edit-day' ? 'Edit Day' : modal === 'planning' ? 'Plan Next Sprint' : modal === 'settings' ? 'Settings' : 'Log Weight'}
                 </h3>
                 <button onClick={() => setModal(null)} className="p-2 hover:bg-[var(--bg-hover)] rounded-full"><X className="w-5 h-5" /></button>
               </div>
@@ -776,6 +916,45 @@ export default function Dashboard() {
                     </div>
                     <button onClick={saveEditDay} disabled={saving} className="btn btn-primary w-full mt-4">
                       {saving ? 'Saving...' : 'Update'}
+                    </button>
+                  </>
+                )}
+                {modal === 'settings' && (
+                  <>
+                    <div>
+                      <p className="text-sm text-[var(--text-dim)] mb-2">Display Name</p>
+                      <input
+                        type="text"
+                        defaultValue={user?.display_name || ''}
+                        id="settings-name-input"
+                        className="input"
+                        placeholder="Your name"
+                      />
+                    </div>
+                    <button
+                      onClick={async () => {
+                        setSaving(true)
+                        const nameInput = document.getElementById('settings-name-input') as HTMLInputElement
+                        const newName = nameInput?.value?.trim()
+                        if (newName && user) {
+                          await supabase.from('profiles').update({ display_name: newName }).eq('id', user.id)
+                          setUser({ ...user, display_name: newName })
+                          notify('Name updated!')
+                        }
+                        setSaving(false)
+                        setModal(null)
+                      }}
+                      disabled={saving}
+                      className="btn btn-primary w-full"
+                    >
+                      {saving ? 'Saving...' : 'Save Changes'}
+                    </button>
+                    <button
+                      onClick={() => supabase.auth.signOut().then(() => router.push('/'))}
+                      className="btn w-full bg-[var(--danger)]/20 text-[var(--danger)] border border-[var(--danger)]/30 hover:bg-[var(--danger)]/30"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      Log Out
                     </button>
                   </>
                 )}
