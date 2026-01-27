@@ -1,241 +1,56 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase'
 import { motion } from 'framer-motion'
-import { Target, Mail, Lock, User, AlertCircle } from 'lucide-react'
+import { Target } from 'lucide-react'
+import { AuthForm } from '@/components/AuthForm'
 
 export default function AuthPage() {
-  const [mode, setMode] = useState<'login' | 'signup'>('login')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [name, setName] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [lobby, setLobby] = useState<{ profile_count: number; is_full: boolean } | null>(null)
-  const [lobbyLoading, setLobbyLoading] = useState(true)
-  const [redirectedFull, setRedirectedFull] = useState(false)
-  const router = useRouter()
-  const supabase = createClient()
-
-  const lobbyFull = !!lobby?.is_full
-
-  useEffect(() => {
-    // Avoid useSearchParams() to keep static builds happy
-    if (typeof window !== 'undefined') {
-      const full = new URLSearchParams(window.location.search).get('full') === '1'
-      setRedirectedFull(full)
-    }
-  }, [])
-
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      setLobbyLoading(true)
-      const { data, error } = await supabase.rpc('lobby_status')
-      if (!cancelled) {
-        if (error) {
-          // If RPC isn't installed yet, don't hard-block signup; just hide this UX.
-          console.warn('lobby_status RPC not available yet:', error.message)
-          setLobby(null)
-        } else if (Array.isArray(data) && data[0]) {
-          setLobby(data[0])
-        } else {
-          setLobby(null)
-        }
-        setLobbyLoading(false)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [supabase])
-
-  useEffect(() => {
-    if (redirectedFull) {
-      setError('Sorry — lobby is full. Only 2 accounts are allowed.')
-      setMode('login')
-    }
-  }, [redirectedFull])
-
-  useEffect(() => {
-    if (lobbyFull && mode === 'signup') setMode('login')
-  }, [lobbyFull, mode])
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoading(true)
-    setError(null)
-
-    try {
-      if (mode === 'signup') {
-        if (lobbyFull) {
-          throw new Error('Sorry — lobby is full. Only 2 accounts are allowed.')
-        }
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: { data: { display_name: name } }
-        })
-        if (error) throw error
-        router.push('/dashboard')
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password })
-        if (error) throw error
-        router.push('/dashboard')
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred')
-    } finally {
-      setLoading(false)
-    }
-  }
-
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 relative z-10">
+    <div className="min-h-screen flex flex-col items-center justify-center p-4 relative z-10 overflow-hidden">
+
+      {/* Background Elements */}
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[var(--accent-primary)] opacity-[0.08] blur-[120px] rounded-full animate-pulse-glow" />
+        <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-[var(--accent-secondary)] opacity-[0.08] blur-[120px] rounded-full animate-pulse-glow" style={{ animationDelay: '1.5s' }} />
+      </div>
+
+
+
       <motion.div
-        initial={{ opacity: 0, y: 16 }}
+        initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4 }}
-        className="w-full max-w-sm"
+        transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }} // smooth easeOutExpo-ish
+        className="w-full max-w-sm relative z-20"
       >
-        {/* Logo */}
-        <div className="text-center mb-10">
+        {/* Logo Section */}
+        <div className="text-center mb-12">
           <motion.div
-            initial={{ scale: 0.8 }}
-            animate={{ scale: 1 }}
-            transition={{ delay: 0.1, type: 'spring', stiffness: 200 }}
-            className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4"
-            style={{ background: 'linear-gradient(135deg, var(--accent-ember), var(--accent-sun))' }}
+            initial={{ scale: 0.8, rotate: -10 }}
+            animate={{ scale: 1, rotate: 0 }}
+            transition={{ delay: 0.2, type: 'spring', stiffness: 200, damping: 20 }}
+            className="inline-flex items-center justify-center w-20 h-20 rounded-3xl mb-6 shadow-2xl"
+            style={{
+              background: 'linear-gradient(135deg, var(--accent-primary), #E84E1B)',
+              boxShadow: '0 8px 32px rgba(255, 107, 43, 0.3)'
+            }}
           >
-            <Target className="w-8 h-8 text-[var(--bg-void)]" />
+            <Target className="w-10 h-10 text-white" />
           </motion.div>
-          <h1 className="text-2xl font-bold text-[var(--accent-sun)] mb-2">BETT</h1>
-          <p className="text-sm text-[var(--text-muted)] tracking-wide leading-relaxed">BATTLE OF THE GAINS</p>
+          <h1 className="text-4xl font-bold text-white mb-2 tracking-tight">BETT</h1>
+          <p className="text-sm text-[var(--text-secondary)] tracking-[0.2em] uppercase font-medium">Battle of the Gains</p>
         </div>
 
-        {/* Card */}
-        <div className="card">
-          {/* Tabs */}
-          <div className="flex border-b border-[var(--border)]">
-            <button
-              onClick={() => setMode('login')}
-              className={`flex-1 py-3 text-sm font-medium transition ${mode === 'login' ? 'text-[var(--accent-sun)] border-b-2 border-[var(--accent-sun)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}`}
-            >
-              Log In
-            </button>
-            <button
-              onClick={() => !lobbyFull && setMode('signup')}
-              disabled={lobbyFull}
-              className={`flex-1 py-3 text-sm font-medium transition ${
-                lobbyFull
-                  ? 'text-[var(--text-muted)] opacity-60 cursor-not-allowed'
-                  : mode === 'signup'
-                    ? 'text-[var(--accent-sun)] border-b-2 border-[var(--accent-sun)]'
-                    : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
-              }`}
-            >
-              {lobbyFull ? 'Lobby Full' : 'Sign Up'}
-            </button>
-          </div>
+        {/* Auth Form */}
+        <AuthForm />
 
-          {/* Form */}
-          <form onSubmit={handleSubmit} className="p-6 space-y-5">
-            {!lobbyLoading && lobbyFull && (
-              <div className="p-3 rounded-lg bg-black/20 border border-[var(--border)] text-sm text-[var(--text-dim)]">
-                Sorry — <span className="text-[var(--text)] font-semibold">lobby is full</span>. Only 2 accounts can exist.
-              </div>
-            )}
-            {error && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                className="flex items-center gap-2 p-3 rounded-lg bg-[var(--danger)]/10 border border-[var(--danger)]/30 text-sm text-[var(--danger)]"
-              >
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{error}</span>
-              </motion.div>
-            )}
-
-            {mode === 'signup' && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-              >
-                <label className="block mb-2 text-xs font-medium tracking-wide text-[var(--text-muted)]">
-                  Name
-                </label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={e => setName(e.target.value)}
-                    placeholder="Your name"
-                    className="input input-icon-left"
-                    required={mode === 'signup'}
-                  />
-                </div>
-              </motion.div>
-            )}
-
-            <div>
-              <label className="block mb-2 text-xs font-medium tracking-wide text-[var(--text-muted)]">
-                Email
-              </label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  placeholder="you@email.com"
-                  className="input input-icon-left"
-                  required
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block mb-2 text-xs font-medium tracking-wide text-[var(--text-muted)]">
-                Password
-              </label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-                <input
-                  type="password"
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="input input-icon-left"
-                  required
-                  minLength={6}
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading || (mode === 'signup' && lobbyFull)}
-              className="btn btn-primary w-full mt-4"
-            >
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <span className="w-4 h-4 border-2 border-[var(--bg-void)] border-t-transparent rounded-full animate-spin" />
-                  {mode === 'login' ? 'Logging in...' : 'Creating account...'}
-                </span>
-              ) : (
-                mode === 'login' ? 'Log In' : 'Create Account'
-              )}
-            </button>
-          </form>
-        </div>
-
-        <p className="text-center text-xs text-[var(--text-muted)] mt-6">
-          A 2-player goal tracking challenge
-        </p>
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.8 }}
+          className="text-center text-xs text-[var(--text-muted)] mt-8"
+        >
+          Design your destiny. 2-player goal tracking.
+        </motion.p>
       </motion.div>
     </div>
   )

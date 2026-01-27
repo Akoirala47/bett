@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Target, Calendar, ChevronLeft,
   CheckCircle, Circle, X, LogOut, Settings,
-  Dumbbell, Flame, Bell, Scale
+  Dumbbell, Flame, Bell, Scale, TrendingUp, Zap
 } from 'lucide-react'
 import { format, differenceInDays, addDays } from 'date-fns'
 
@@ -18,6 +18,7 @@ interface DailyTask { id: string; user_id: string; date: string; gym_completed: 
 interface GameState { id: number; pot_amount: number }
 
 const DAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
+const FULL_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 export default function Dashboard() {
   const router = useRouter()
@@ -32,11 +33,15 @@ export default function Dashboard() {
   const [todayTask, setTodayTask] = useState<DailyTask | null>(null)
   const [partnerTask, setPartnerTask] = useState<DailyTask | null>(null)
   const [weekTasks, setWeekTasks] = useState<DailyTask[]>([])
+  const [partnerWeekTasks, setPartnerWeekTasks] = useState<DailyTask[]>([])
   const [gameState, setGameState] = useState<GameState | null>(null)
   const [loading, setLoading] = useState(true)
   const [peekOpen, setPeekOpen] = useState(false)
   const [notification, setNotification] = useState<string | null>(null)
-  const [modal, setModal] = useState<'schedule' | 'sprint' | 'weight' | null>(null)
+  const [modal, setModal] = useState<'schedule' | 'sprint' | 'weight' | 'edit-day' | null>(null)
+  const [editingDate, setEditingDate] = useState<string | null>(null)
+  const [editGym, setEditGym] = useState(false)
+  const [editCalories, setEditCalories] = useState(false)
   
   const [gymDays, setGymDays] = useState<number[]>([])
   const [calorieGoal, setCalorieGoal] = useState('')
@@ -114,7 +119,11 @@ export default function Dashboard() {
     const { data: wt } = await supabase.from('daily_tasks').select('*').eq('user_id', uid).order('date', { ascending: false }).limit(7)
     if (wt) setWeekTasks(wt)
     
-    // Partner week data is optional for UI; no local state needed here.
+    // Partner week data for rival panel stats
+    if (partner) {
+      const { data: pwt } = await supabase.from('daily_tasks').select('*').eq('user_id', partner.id).order('date', { ascending: false }).limit(14)
+      if (pwt) setPartnerWeekTasks(pwt)
+    }
     
     setLoading(false)
   }
@@ -208,6 +217,81 @@ export default function Dashboard() {
     setSaving(false)
   }
 
+  const openEditDay = (date: string) => {
+    const task = weekTasks.find(t => t.date === date)
+    setEditingDate(date)
+    setEditGym(task?.gym_completed || false)
+    setEditCalories(task?.calories_completed || false)
+    setModal('edit-day')
+  }
+
+  const saveEditDay = async () => {
+    if (!user || !editingDate) return
+    setSaving(true)
+    const existing = weekTasks.find(t => t.date === editingDate)
+    const { data } = await supabase.from('daily_tasks').upsert({
+      user_id: user.id,
+      date: editingDate,
+      gym_completed: editGym,
+      calories_completed: editCalories,
+      weight: existing?.weight || null
+    }, { onConflict: 'user_id,date' }).select().single()
+    if (data) {
+      // Update weekTasks
+      setWeekTasks(prev => {
+        const idx = prev.findIndex(t => t.date === editingDate)
+        if (idx >= 0) {
+          const copy = [...prev]
+          copy[idx] = data
+          return copy
+        }
+        return [data, ...prev]
+      })
+      // If editing today, also update todayTask
+      if (editingDate === today) {
+        setTodayTask(data)
+      }
+      setModal(null)
+      setEditingDate(null)
+    }
+    setSaving(false)
+  }
+
+  // Calculate partner stats for rival panel
+  const getPartnerStats = () => {
+    const last7Days: string[] = []
+    for (let i = 0; i < 7; i++) {
+      last7Days.push(format(addDays(new Date(), -i), 'yyyy-MM-dd'))
+    }
+    
+    const last7Tasks = partnerWeekTasks.filter(t => last7Days.includes(t.date))
+    const gymCount = last7Tasks.filter(t => t.gym_completed).length
+    
+    // Calculate calorie streak (consecutive days from most recent)
+    let calorieStreak = 0
+    const sortedTasks = [...partnerWeekTasks].sort((a, b) => b.date.localeCompare(a.date))
+    for (const task of sortedTasks) {
+      if (task.calories_completed) {
+        calorieStreak++
+      } else {
+        break
+      }
+    }
+
+    // Get scheduled gym days count in last 7 days
+    let scheduledGymDays = 0
+    if (partnerSchedule?.gym_days) {
+      for (let i = 0; i < 7; i++) {
+        const d = addDays(new Date(), -i)
+        if (partnerSchedule.gym_days.includes(d.getDay())) {
+          scheduledGymDays++
+        }
+      }
+    }
+
+    return { gymCount, calorieStreak, scheduledGymDays, last7Tasks }
+  }
+
   const isGymDay = schedule?.gym_days?.includes(dayOfWeek)
   const hasCal = schedule?.calorie_goal && schedule.calorie_goal > 0
   const progress = sprint ? Math.min(100, (sprint.current_value / sprint.target_value) * 100) : 0
@@ -244,7 +328,7 @@ export default function Dashboard() {
       </header>
 
       <main
-        className="container py-10 space-y-12"
+        className="container py-10 space-y-8"
         style={{ paddingBottom: 'calc(56px + env(safe-area-inset-bottom))' }}
       >
         {/* Today */}
@@ -297,25 +381,31 @@ export default function Dashboard() {
         </section>
 
         {/* Week */}
-        <section className="week-grid">
-          {Array.from({ length: 7 }, (_, i) => {
-            const d = addDays(new Date(), -6 + i)
-            const ds = format(d, 'yyyy-MM-dd')
-            const task = weekTasks.find(t => t.date === ds)
-            const isToday = ds === today
-            const gymDay = schedule?.gym_days?.includes(d.getDay())
-            
-            return (
-              <div key={i} className={`week-day ${isToday ? 'today' : ''}`}>
-                <p className="text-xs text-[var(--text-muted)] mb-1">{DAYS[d.getDay()]}</p>
-                <p className="text-lg font-semibold mb-2">{format(d, 'd')}</p>
-                <div className="flex justify-center gap-1">
-                  {gymDay && <div className={`w-3 h-3 rounded-full ${task?.gym_completed ? 'bg-[var(--teal)]' : 'bg-[var(--border)]'}`} />}
-                  {hasCal && <div className={`w-3 h-3 rounded-full ${task?.calories_completed ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'}`} />}
-                </div>
-              </div>
-            )
-          })}
+        <section className="week-scroll-container my-6">
+          <div className="week-grid">
+            {Array.from({ length: 7 }, (_, i) => {
+              const d = addDays(new Date(), -6 + i)
+              const ds = format(d, 'yyyy-MM-dd')
+              const task = weekTasks.find(t => t.date === ds)
+              const isToday = ds === today
+              const gymDay = schedule?.gym_days?.includes(d.getDay())
+              
+              return (
+                <button 
+                  key={i} 
+                  onClick={() => openEditDay(ds)}
+                  className={`week-day ${isToday ? 'today' : ''}`}
+                >
+                  <p className="text-xs text-[var(--text-muted)] mb-1">{DAYS[d.getDay()]}</p>
+                  <p className="text-lg font-semibold mb-2">{format(d, 'd')}</p>
+                  <div className="flex justify-center gap-1">
+                    {gymDay && <div className={`w-3 h-3 rounded-full ${task?.gym_completed ? 'bg-[var(--teal)]' : 'bg-[var(--border)]'}`} />}
+                    {hasCal && <div className={`w-3 h-3 rounded-full ${task?.calories_completed ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'}`} />}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
         </section>
 
         {/* Sprint */}
@@ -358,30 +448,104 @@ export default function Dashboard() {
           <X className="w-6 h-6 text-[var(--text-muted)]" />
         </button>
         
-        <h2 className="text-xl font-bold text-[var(--teal)] mb-6">{partner?.display_name || 'Rival'}</h2>
+        <h2 className="text-2xl font-bold text-[var(--teal)] mb-2">{partner?.display_name || 'Rival'}</h2>
+        <p className="text-sm text-[var(--text-dim)] mb-6">What they&apos;ve been up to</p>
         
-        <div className="space-y-3 mb-6">
-          {partnerSchedule?.gym_days?.includes(dayOfWeek) && (
-            <div className={`flex items-center gap-3 p-3 rounded-lg ${partnerTask?.gym_completed ? 'bg-[var(--teal)]/15' : 'bg-[var(--bg-card)]'}`}>
-              {partnerTask?.gym_completed ? <CheckCircle className="w-5 h-5 text-[var(--teal)]" /> : <Circle className="w-5 h-5 text-[var(--text-muted)]" />}
-              <span>Gym</span>
-            </div>
-          )}
-          {partnerSchedule?.calorie_goal && (
-            <div className={`flex items-center gap-3 p-3 rounded-lg ${partnerTask?.calories_completed ? 'bg-[var(--accent)]/15' : 'bg-[var(--bg-card)]'}`}>
-              {partnerTask?.calories_completed ? <CheckCircle className="w-5 h-5 text-[var(--accent)]" /> : <Circle className="w-5 h-5 text-[var(--text-muted)]" />}
-              <span>Calories</span>
-            </div>
-          )}
+        {/* Today's Status */}
+        <div className="mb-6">
+          <p className="text-xs uppercase tracking-wide text-[var(--text-muted)] mb-3">Today</p>
+          <div className="space-y-2">
+            {partnerSchedule?.gym_days?.includes(dayOfWeek) && (
+              <div className={`flex items-center gap-3 p-3 rounded-lg ${partnerTask?.gym_completed ? 'bg-[var(--teal)]/15' : 'bg-[var(--bg-card)]'}`}>
+                {partnerTask?.gym_completed ? <CheckCircle className="w-5 h-5 text-[var(--teal)]" /> : <Circle className="w-5 h-5 text-[var(--text-muted)]" />}
+                <span>Gym</span>
+              </div>
+            )}
+            {partnerSchedule?.calorie_goal && (
+              <div className={`flex items-center gap-3 p-3 rounded-lg ${partnerTask?.calories_completed ? 'bg-[var(--accent)]/15' : 'bg-[var(--bg-card)]'}`}>
+                {partnerTask?.calories_completed ? <CheckCircle className="w-5 h-5 text-[var(--accent)]" /> : <Circle className="w-5 h-5 text-[var(--text-muted)]" />}
+                <span>Calories</span>
+              </div>
+            )}
+            {!partnerSchedule?.gym_days?.includes(dayOfWeek) && !partnerSchedule?.calorie_goal && (
+              <p className="text-[var(--text-dim)] text-sm py-2">Rest day</p>
+            )}
+          </div>
         </div>
 
+        {/* Weekly Stats */}
+        {(() => {
+          const stats = getPartnerStats()
+          return (
+            <div className="mb-6">
+              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)] mb-3">This Week</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="stat-card">
+                  <Dumbbell className="w-5 h-5 text-[var(--teal)] mb-2" />
+                  <p className="text-2xl font-bold">{stats.gymCount}<span className="text-sm text-[var(--text-dim)]">/{stats.scheduledGymDays}</span></p>
+                  <p className="text-xs text-[var(--text-dim)]">Gym sessions</p>
+                </div>
+                <div className="stat-card">
+                  <Zap className="w-5 h-5 text-[var(--accent)] mb-2" />
+                  <p className="text-2xl font-bold">{stats.calorieStreak}</p>
+                  <p className="text-xs text-[var(--text-dim)]">Calorie streak</p>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* Week History */}
+        <div className="mb-6">
+          <p className="text-xs uppercase tracking-wide text-[var(--text-muted)] mb-3">Past 7 Days</p>
+          <div className="space-y-2">
+            {Array.from({ length: 7 }, (_, i) => {
+              const d = addDays(new Date(), -i)
+              const ds = format(d, 'yyyy-MM-dd')
+              const task = partnerWeekTasks.find(t => t.date === ds)
+              const gymDay = partnerSchedule?.gym_days?.includes(d.getDay())
+              const isToday = i === 0
+              
+              return (
+                <div key={i} className="flex items-center gap-3 py-2 border-b border-[var(--border)] last:border-0">
+                  <span className="w-12 text-sm text-[var(--text-dim)]">
+                    {isToday ? 'Today' : FULL_DAYS[d.getDay()]}
+                  </span>
+                  <div className="flex-1 flex items-center gap-2">
+                    {gymDay && (
+                      <div className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${task?.gym_completed ? 'bg-[var(--teal)]/20 text-[var(--teal)]' : 'bg-[var(--bg-card)] text-[var(--text-muted)]'}`}>
+                        <Dumbbell className="w-3 h-3" />
+                        {task?.gym_completed ? '✓' : '—'}
+                      </div>
+                    )}
+                    {partnerSchedule?.calorie_goal && (
+                      <div className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${task?.calories_completed ? 'bg-[var(--accent)]/20 text-[var(--accent)]' : 'bg-[var(--bg-card)] text-[var(--text-muted)]'}`}>
+                        <Flame className="w-3 h-3" />
+                        {task?.calories_completed ? '✓' : '—'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Sprint Progress */}
         {partnerSprint && (
-          <div className="p-4 bg-[var(--bg-card)] rounded-xl">
-            <p className="font-medium mb-3">{partnerSprint.goal_title}</p>
+          <div className="p-4 bg-[var(--bg-card)] rounded-xl border border-[var(--teal)]/30">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingUp className="w-4 h-4 text-[var(--teal)]" />
+              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Sprint Goal</p>
+            </div>
+            <p className="font-semibold mb-3">{partnerSprint.goal_title}</p>
             <div className="progress-track mb-2">
               <div className="progress-fill progress-fill-teal" style={{ width: `${Math.min(100, (partnerSprint.current_value / partnerSprint.target_value) * 100)}%` }} />
             </div>
-            <p className="text-sm text-[var(--text-dim)]">{partnerSprint.current_value || 0}/{partnerSprint.target_value} · ${partnerSprint.money_on_line}</p>
+            <div className="flex justify-between text-sm">
+              <span className="text-[var(--text-dim)]">{partnerSprint.current_value || 0}/{partnerSprint.target_value}</span>
+              <span className="text-[var(--accent)] font-medium">${partnerSprint.money_on_line}</span>
+            </div>
           </div>
         )}
       </div>
@@ -392,7 +556,9 @@ export default function Dashboard() {
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="modal-backdrop" onClick={() => setModal(null)}>
             <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="modal" onClick={e => e.stopPropagation()}>
               <div className="modal-header">
-                <h3 className="text-lg font-semibold">{modal === 'schedule' ? 'Schedule' : modal === 'sprint' ? 'New Sprint' : 'Log Weight'}</h3>
+                <h3 className="text-lg font-semibold">
+                  {modal === 'schedule' ? 'Schedule' : modal === 'sprint' ? 'New Sprint' : modal === 'edit-day' ? 'Edit Day' : 'Log Weight'}
+                </h3>
                 <button onClick={() => setModal(null)} className="p-2 hover:bg-[var(--bg-hover)] rounded-full"><X className="w-5 h-5" /></button>
               </div>
               <div className="modal-body space-y-5">
@@ -441,6 +607,38 @@ export default function Dashboard() {
                       <input type="number" value={weightInput} onChange={e => setWeightInput(e.target.value)} placeholder={todayTask?.weight?.toString() || ''} className="input text-2xl text-center" step="0.1" autoFocus />
                     </div>
                     <button onClick={saveWeight} disabled={!weightInput || saving} className="btn btn-primary w-full">{saving ? 'Saving...' : 'Save'}</button>
+                  </>
+                )}
+                {modal === 'edit-day' && editingDate && (
+                  <>
+                    <p className="text-center text-lg font-medium mb-4">
+                      {format(new Date(editingDate + 'T12:00:00'), 'EEEE, MMMM d')}
+                    </p>
+                    <div className="space-y-3">
+                      {schedule?.gym_days?.includes(new Date(editingDate + 'T12:00:00').getDay()) && (
+                        <button 
+                          onClick={() => setEditGym(!editGym)} 
+                          className={`task-btn ${editGym ? 'done' : ''}`}
+                        >
+                          {editGym ? <CheckCircle className="w-6 h-6 text-[var(--teal)]" /> : <Circle className="w-6 h-6 text-[var(--text-muted)]" />}
+                          <Dumbbell className="w-5 h-5 text-[var(--teal)]" />
+                          <span className="text-lg font-medium">Hit the gym</span>
+                        </button>
+                      )}
+                      {hasCal && (
+                        <button 
+                          onClick={() => setEditCalories(!editCalories)} 
+                          className={`task-btn ${editCalories ? 'done-accent' : ''}`}
+                        >
+                          {editCalories ? <CheckCircle className="w-6 h-6 text-[var(--accent)]" /> : <Circle className="w-6 h-6 text-[var(--text-muted)]" />}
+                          <Flame className="w-5 h-5 text-[var(--accent)]" />
+                          <span className="text-lg font-medium">Calories</span>
+                        </button>
+                      )}
+                    </div>
+                    <button onClick={saveEditDay} disabled={saving} className="btn btn-primary w-full mt-4">
+                      {saving ? 'Saving...' : 'Update'}
+                    </button>
                   </>
                 )}
               </div>

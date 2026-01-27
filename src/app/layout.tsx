@@ -1,13 +1,15 @@
 import type { Metadata, Viewport } from "next";
+import { Inter } from "next/font/google";
 import { StarField } from "@/components/StarField";
 import "./globals.css";
+
+const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "BETT",
   description: "Two-person goal tracking.",
   applicationName: "BETT",
   manifest: "/manifest.webmanifest",
-  themeColor: "#e89840",
   appleWebApp: {
     capable: true,
     title: "BETT",
@@ -22,6 +24,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  themeColor: "#FF6B2B",
 };
 
 export default function RootLayout({
@@ -31,7 +34,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="antialiased">
+      <body className={`${inter.className} antialiased`}>
         <StarField />
         {children}
       </body>
