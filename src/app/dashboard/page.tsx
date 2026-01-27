@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 import { motion, AnimatePresence } from 'framer-motion'
-import { 
+import {
   Target, Calendar, ChevronLeft,
   CheckCircle, Circle, X, LogOut, Settings,
   Dumbbell, Flame, Bell, Scale, TrendingUp, Zap
@@ -13,7 +13,7 @@ import { format, differenceInDays, addDays } from 'date-fns'
 
 interface Profile { id: string; email: string; display_name: string }
 interface Schedule { id: string; user_id: string; gym_days: number[]; calorie_goal: number | null }
-interface Sprint { id: string; user_id: string; goal_title: string; target_value: number; current_value: number; money_on_line: number; start_date: string; end_date: string }
+interface Sprint { id: string; user_id: string; goal_title: string; target_value: number; current_value: number; start_value: number; money_on_line: number; sprint_number?: number; start_date: string; end_date: string; status: string }
 interface DailyTask { id: string; user_id: string; date: string; gym_completed: boolean; calories_completed: boolean; weight: number | null }
 interface GameState { id: number; pot_amount: number }
 
@@ -23,12 +23,13 @@ const FULL_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 export default function Dashboard() {
   const router = useRouter()
   const supabase = createClient()
-  
+
   const [user, setUser] = useState<Profile | null>(null)
   const [partner, setPartner] = useState<Profile | null>(null)
   const [schedule, setSchedule] = useState<Schedule | null>(null)
   const [partnerSchedule, setPartnerSchedule] = useState<Schedule | null>(null)
   const [sprint, setSprint] = useState<Sprint | null>(null)
+  const [nextSprint, setNextSprint] = useState<Sprint | null>(null)
   const [partnerSprint, setPartnerSprint] = useState<Sprint | null>(null)
   const [todayTask, setTodayTask] = useState<DailyTask | null>(null)
   const [partnerTask, setPartnerTask] = useState<DailyTask | null>(null)
@@ -38,11 +39,11 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [peekOpen, setPeekOpen] = useState(false)
   const [notification, setNotification] = useState<string | null>(null)
-  const [modal, setModal] = useState<'schedule' | 'sprint' | 'weight' | 'edit-day' | null>(null)
+  const [modal, setModal] = useState<'schedule' | 'sprint' | 'weight' | 'edit-day' | 'planning' | null>(null)
   const [editingDate, setEditingDate] = useState<string | null>(null)
   const [editGym, setEditGym] = useState(false)
   const [editCalories, setEditCalories] = useState(false)
-  
+
   const [gymDays, setGymDays] = useState<number[]>([])
   const [calorieGoal, setCalorieGoal] = useState('')
   const [goalTitle, setGoalTitle] = useState('')
@@ -84,62 +85,86 @@ export default function Dashboard() {
       p = np
     }
     if (p) setUser(p)
-    
+
     const { data: partner } = await supabase.from('profiles').select('*').neq('id', uid).limit(1).single()
     if (partner) setPartner(partner)
-    
+
     let { data: gs } = await supabase.from('game_state').select('*').eq('id', 1).single()
     if (!gs) { const { data: ngs } = await supabase.from('game_state').insert({ id: 1, current_sprint: 1, pot_amount: 0 }).select().single(); gs = ngs }
     if (gs) setGameState(gs)
-    
+
     const { data: sch } = await supabase.from('schedules').select('*').eq('user_id', uid).single()
     if (sch) { setSchedule(sch); setGymDays(sch.gym_days || []); setCalorieGoal(sch.calorie_goal?.toString() || '') }
-    
+
     if (partner) {
       const { data: ps } = await supabase.from('schedules').select('*').eq('user_id', partner.id).single()
       if (ps) setPartnerSchedule(ps)
     }
-    
+
     const { data: sp } = await supabase.from('sprints').select('*').eq('user_id', uid).eq('status', 'active').limit(1).single()
-    if (sp) setSprint(sp)
-    
+    if (sp) {
+      // Check if expired
+      if (new Date(sp.end_date) < new Date()) {
+        await supabase.from('sprints').update({ status: 'completed' }).eq('id', sp.id)
+        setSprint(null)
+        // Check for pending
+        const { data: pending } = await supabase.from('sprints').select('*').eq('user_id', uid).eq('status', 'pending').order('start_date', { ascending: true }).limit(1).single()
+        if (pending && new Date(pending.start_date) <= new Date()) {
+          const { data: activated } = await supabase.from('sprints').update({ status: 'active' }).eq('id', pending.id).select().single()
+          if (activated) setSprint(activated)
+        }
+      } else {
+        setSprint(sp)
+        // Check if next sprint exists
+        const { data: ns } = await supabase.from('sprints').select('*').eq('user_id', uid).eq('status', 'pending').limit(1).single()
+        if (ns) setNextSprint(ns)
+      }
+    } else {
+      // No active sprint, check for pending that should be active
+      const { data: pending } = await supabase.from('sprints').select('*').eq('user_id', uid).eq('status', 'pending').order('start_date', { ascending: true }).limit(1).single()
+      if (pending && new Date(pending.start_date) <= new Date()) {
+        const { data: activated } = await supabase.from('sprints').update({ status: 'active' }).eq('id', pending.id).select().single()
+        if (activated) setSprint(activated)
+      }
+    }
+
     if (partner) {
       const { data: psp } = await supabase.from('sprints').select('*').eq('user_id', partner.id).eq('status', 'active').limit(1).single()
       if (psp) setPartnerSprint(psp)
     }
-    
+
     const { data: tt } = await supabase.from('daily_tasks').select('*').eq('user_id', uid).eq('date', today).single()
     if (tt) setTodayTask(tt)
-    
+
     if (partner) {
       const { data: pt } = await supabase.from('daily_tasks').select('*').eq('user_id', partner.id).eq('date', today).single()
       if (pt) setPartnerTask(pt)
     }
-    
+
     const { data: wt } = await supabase.from('daily_tasks').select('*').eq('user_id', uid).order('date', { ascending: false }).limit(7)
     if (wt) setWeekTasks(wt)
-    
+
     // Partner week data for rival panel stats
     if (partner) {
       const { data: pwt } = await supabase.from('daily_tasks').select('*').eq('user_id', partner.id).order('date', { ascending: false }).limit(14)
       if (pwt) setPartnerWeekTasks(pwt)
     }
-    
+
     setLoading(false)
   }
 
   useEffect(() => {
     let cancelled = false
-    ;(async () => {
-      const { data: { user: authUser } } = await supabase.auth.getUser()
-      if (!authUser) {
-        router.push('/')
-        return
-      }
-      if (!cancelled) {
-        await load(authUser.id)
-      }
-    })()
+      ; (async () => {
+        const { data: { user: authUser } } = await supabase.auth.getUser()
+        if (!authUser) {
+          router.push('/')
+          return
+        }
+        if (!cancelled) {
+          await load(authUser.id)
+        }
+      })()
     return () => {
       cancelled = true
     }
@@ -174,12 +199,49 @@ export default function Dashboard() {
     if (!user || !gameState || !goalTitle || !targetValue) return
     setSaving(true)
     const money = parseInt(moneyOnLine) || 25
-    const { data } = await supabase.from('sprints').insert({ user_id: user.id, goal_title: goalTitle, goal_description: '', target_value: parseFloat(targetValue), current_value: 0, unit: 'lbs', money_on_line: money, sprint_number: 1, start_date: new Date().toISOString(), end_date: addDays(new Date(), 14).toISOString(), status: 'active' }).select().single()
+    const startVal = todayTask?.weight || 0
+    const { data } = await supabase.from('sprints').insert({ user_id: user.id, goal_title: goalTitle, goal_description: '', target_value: parseFloat(targetValue), current_value: startVal, start_value: startVal, unit: 'lbs', money_on_line: money, sprint_number: 1, start_date: new Date().toISOString(), end_date: addDays(new Date(), 14).toISOString(), status: 'active' }).select().single()
     if (data) {
       setSprint(data)
       await supabase.from('game_state').update({ pot_amount: gameState.pot_amount + money }).eq('id', 1)
       setGameState({ ...gameState, pot_amount: gameState.pot_amount + money })
       setModal(null)
+    }
+    setSaving(false)
+    setSaving(false)
+  }
+
+  const planNextSprint = async () => {
+    if (!user || !sprint || !goalTitle || !targetValue) return
+    setSaving(true)
+    const money = parseInt(moneyOnLine) || 25
+    // Start date is day after current sprint ends
+    const nextStart = addDays(new Date(sprint.end_date), 1)
+    const nextEnd = addDays(nextStart, 14) // 2 weeks duration
+
+    // We don't know the exact start weight yet, so we use current weight or target. 
+    // Ideally update this when it activates? For now, use current weight as placeholder.
+    const startVal = todayTask?.weight || 0
+
+    const { data } = await supabase.from('sprints').insert({
+      user_id: user.id,
+      goal_title: goalTitle,
+      goal_description: '',
+      target_value: parseFloat(targetValue),
+      current_value: startVal,
+      start_value: startVal,
+      unit: 'lbs',
+      money_on_line: money,
+      sprint_number: (sprint.sprint_number || 1) + 1,
+      start_date: nextStart.toISOString(),
+      end_date: nextEnd.toISOString(),
+      status: 'pending'
+    }).select().single()
+
+    if (data) {
+      setNextSprint(data)
+      setModal(null)
+      notify('Next sprint scheduled!')
     }
     setSaving(false)
   }
@@ -263,10 +325,10 @@ export default function Dashboard() {
     for (let i = 0; i < 7; i++) {
       last7Days.push(format(addDays(new Date(), -i), 'yyyy-MM-dd'))
     }
-    
+
     const last7Tasks = partnerWeekTasks.filter(t => last7Days.includes(t.date))
     const gymCount = last7Tasks.filter(t => t.gym_completed).length
-    
+
     // Calculate calorie streak (consecutive days from most recent)
     let calorieStreak = 0
     const sortedTasks = [...partnerWeekTasks].sort((a, b) => b.date.localeCompare(a.date))
@@ -294,7 +356,22 @@ export default function Dashboard() {
 
   const isGymDay = schedule?.gym_days?.includes(dayOfWeek)
   const hasCal = schedule?.calorie_goal && schedule.calorie_goal > 0
-  const progress = sprint ? Math.min(100, (sprint.current_value / sprint.target_value) * 100) : 0
+
+
+  // Progress calculation: (Current - Start) / (Target - Start)
+  // Example: Start 150, Target 160, Current 155. Change=5, Total=10. Progress=50%.
+  const sprintStart = sprint?.start_value || 0
+  const sprintTarget = sprint?.target_value || 1
+  const sprintCurrent = sprint?.current_value || sprintStart
+
+  let progress = 0
+  if (sprint) {
+    const totalDist = sprintTarget - sprintStart
+    const currentDist = sprintCurrent - sprintStart
+    if (Math.abs(totalDist) > 0.01) {
+      progress = Math.min(100, Math.max(0, (currentDist / totalDist) * 100))
+    }
+  }
   const daysLeft = sprint ? Math.max(0, differenceInDays(new Date(sprint.end_date), new Date())) : 0
 
   if (loading) return <div className="min-h-screen flex items-center justify-center"><div className="w-8 h-8 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" /></div>
@@ -352,7 +429,7 @@ export default function Dashboard() {
                   <span className="text-lg font-medium">Hit the gym</span>
                 </button>
               )}
-              
+
               {hasCal && (
                 <button onClick={() => toggle('calories')} className={`task-btn ${todayTask?.calories_completed ? 'done-accent' : ''}`}>
                   {todayTask?.calories_completed ? <CheckCircle className="w-6 h-6 text-[var(--accent)]" /> : <Circle className="w-6 h-6 text-[var(--text-muted)]" />}
@@ -360,7 +437,7 @@ export default function Dashboard() {
                   <span className="text-lg font-medium">{schedule.calorie_goal?.toLocaleString()} calories</span>
                 </button>
               )}
-              
+
               <button onClick={() => setModal('weight')} className="task-btn">
                 <Scale className="w-6 h-6 text-[var(--text-muted)]" />
                 <span className={`text-lg ${todayTask?.weight ? 'font-medium' : 'text-[var(--text-muted)]'}`}>
@@ -389,10 +466,10 @@ export default function Dashboard() {
               const task = weekTasks.find(t => t.date === ds)
               const isToday = ds === today
               const gymDay = schedule?.gym_days?.includes(d.getDay())
-              
+
               return (
-                <button 
-                  key={i} 
+                <button
+                  key={i}
                   onClick={() => openEditDay(ds)}
                   className={`week-day ${isToday ? 'today' : ''}`}
                 >
@@ -433,6 +510,35 @@ export default function Dashboard() {
             </button>
           </section>
         )}
+
+        {/* Sprint Planning Prompt */}
+        {sprint && daysLeft <= 2 && !nextSprint && (
+          <section className="card border border-[var(--accent)]/50 relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-1 bg-[var(--accent)] h-full" />
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-[var(--accent)]">Sprint Planning</h2>
+                <p className="text-[var(--text-dim)] mt-1">Time to lock in your next 2-week goal.</p>
+              </div>
+              <button onClick={() => setModal('planning')} className="btn btn-primary px-6">
+                Plan Next
+              </button>
+            </div>
+          </section>
+        )}
+
+        {nextSprint && (
+          <section className="p-4 rounded-xl border border-[var(--border)] bg-[var(--bg-card)]/50 flex items-center justify-between">
+            <div>
+              <p className="text-xs text-[var(--text-dim)] uppercase tracking-wide">Up Next</p>
+              <p className="font-semibold">{nextSprint.goal_title}</p>
+              <p className="text-xs text-[var(--text-muted)]">Starts {format(new Date(nextSprint.start_date), 'MMM d')}</p>
+            </div>
+            <div className="px-3 py-1 rounded bg-[var(--bg-layer-1)] text-xs text-[var(--text-dim)]">
+              Locked
+            </div>
+          </section>
+        )}
       </main>
 
       {/* Floating Rival Button */}
@@ -447,10 +553,10 @@ export default function Dashboard() {
         <button onClick={() => setPeekOpen(false)} className="absolute top-6 right-6 p-2 hover:bg-[var(--bg-hover)] rounded-full">
           <X className="w-6 h-6 text-[var(--text-muted)]" />
         </button>
-        
+
         <h2 className="text-2xl font-bold text-[var(--teal)] mb-2">{partner?.display_name || 'Rival'}</h2>
         <p className="text-sm text-[var(--text-dim)] mb-6">What they&apos;ve been up to</p>
-        
+
         {/* Today's Status */}
         <div className="mb-6">
           <p className="text-xs uppercase tracking-wide text-[var(--text-muted)] mb-3">Today</p>
@@ -505,7 +611,7 @@ export default function Dashboard() {
               const task = partnerWeekTasks.find(t => t.date === ds)
               const gymDay = partnerSchedule?.gym_days?.includes(d.getDay())
               const isToday = i === 0
-              
+
               return (
                 <div key={i} className="flex items-center gap-3 py-2 border-b border-[var(--border)] last:border-0">
                   <span className="w-12 text-sm text-[var(--text-dim)]">
@@ -540,7 +646,16 @@ export default function Dashboard() {
             </div>
             <p className="font-semibold mb-3">{partnerSprint.goal_title}</p>
             <div className="progress-track mb-2">
-              <div className="progress-fill progress-fill-teal" style={{ width: `${Math.min(100, (partnerSprint.current_value / partnerSprint.target_value) * 100)}%` }} />
+              <div className="progress-fill progress-fill-teal" style={{
+                width: `${(() => {
+                  const start = partnerSprint.start_value || 0
+                  const target = partnerSprint.target_value || 1
+                  const current = partnerSprint.current_value || start
+                  const total = target - start
+                  if (Math.abs(total) < 0.01) return 0
+                  return Math.min(100, Math.max(0, ((current - start) / total) * 100))
+                })()}%`
+              }} />
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-[var(--text-dim)]">{partnerSprint.current_value || 0}/{partnerSprint.target_value}</span>
@@ -600,6 +715,29 @@ export default function Dashboard() {
                     <button onClick={createSprint} disabled={!goalTitle || !targetValue || saving} className="btn btn-primary w-full">{saving ? 'Creating...' : 'Start Sprint'}</button>
                   </>
                 )}
+                {modal === 'planning' && (
+                  <>
+                    <div className="mb-4">
+                      <h4 className="font-medium text-[var(--accent)] mb-2">Plan Next Sprint</h4>
+                      <p className="text-xs text-[var(--text-dim)]">Starts {sprint && format(addDays(new Date(sprint.end_date), 1), 'MMM d')}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-[var(--text-dim)] mb-2">Goal Title</p>
+                      <input value={goalTitle} onChange={e => setGoalTitle(e.target.value)} placeholder="e.g., Shred Phase 2" className="input" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-sm text-[var(--text-dim)] mb-2">Target Weight</p>
+                        <input type="number" value={targetValue} onChange={e => setTargetValue(e.target.value)} placeholder="120" className="input" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-[var(--text-dim)] mb-2">Wager ($)</p>
+                        <input type="number" value={moneyOnLine} onChange={e => setMoneyOnLine(e.target.value)} placeholder="25" className="input" />
+                      </div>
+                    </div>
+                    <button onClick={planNextSprint} disabled={!goalTitle || !targetValue || saving} className="btn btn-primary w-full">{saving ? 'Locking in...' : 'Lock In Next Sprint'}</button>
+                  </>
+                )}
                 {modal === 'weight' && (
                   <>
                     <div>
@@ -616,8 +754,8 @@ export default function Dashboard() {
                     </p>
                     <div className="space-y-3">
                       {schedule?.gym_days?.includes(new Date(editingDate + 'T12:00:00').getDay()) && (
-                        <button 
-                          onClick={() => setEditGym(!editGym)} 
+                        <button
+                          onClick={() => setEditGym(!editGym)}
                           className={`task-btn ${editGym ? 'done' : ''}`}
                         >
                           {editGym ? <CheckCircle className="w-6 h-6 text-[var(--teal)]" /> : <Circle className="w-6 h-6 text-[var(--text-muted)]" />}
@@ -626,8 +764,8 @@ export default function Dashboard() {
                         </button>
                       )}
                       {hasCal && (
-                        <button 
-                          onClick={() => setEditCalories(!editCalories)} 
+                        <button
+                          onClick={() => setEditCalories(!editCalories)}
                           className={`task-btn ${editCalories ? 'done-accent' : ''}`}
                         >
                           {editCalories ? <CheckCircle className="w-6 h-6 text-[var(--accent)]" /> : <Circle className="w-6 h-6 text-[var(--text-muted)]" />}
