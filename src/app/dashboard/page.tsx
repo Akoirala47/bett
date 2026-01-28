@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -10,6 +10,7 @@ import {
   Dumbbell, Flame, Bell, Scale, TrendingUp, Zap, Home, User
 } from 'lucide-react'
 import { format, differenceInDays, addDays } from 'date-fns'
+import { requestNotificationPermission, showRivalNotification } from '@/lib/notifications'
 
 interface Profile { id: string; email: string; display_name: string }
 interface Schedule { id: string; user_id: string; gym_days: number[]; calorie_goal: number | null }
@@ -190,21 +191,47 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase, router, today])
 
+  // Request notification permission on mount
   useEffect(() => {
-    if (!user || !partner) return
+    requestNotificationPermission()
+  }, [])
+
+  useEffect(() => {
+    if (!user || !partner || !gameState) return
     const ch = supabase.channel('rt')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_tasks', filter: `user_id=eq.${partner.id}` }, (p) => {
         const n = p.new as DailyTask, o = p.old as DailyTask
         if (n?.date === today) {
           setPartnerTask(n)
-          if (o && !o.gym_completed && n.gym_completed) notify(`${partner.display_name} hit the gym!`)
-          if (o && !o.calories_completed && n.calories_completed) notify(`${partner.display_name} hit calories!`)
+          const notifConfig = { rivalName: partner.display_name, betAmount: gameState.pot_amount }
+
+          // Gym completed
+          if (o && !o.gym_completed && n.gym_completed) {
+            notify(`${partner.display_name} hit the gym!`)
+            showRivalNotification('gym', notifConfig)
+          }
+
+          // Calories completed
+          if (o && !o.calories_completed && n.calories_completed) {
+            notify(`${partner.display_name} hit calories!`)
+            showRivalNotification('calories', notifConfig)
+          }
+
+          // Calories added (even if not completed)
+          if (o && (n.current_calories || 0) > (o.current_calories || 0)) {
+            showRivalNotification('calories', notifConfig)
+          }
+
+          // Weight logged
+          if (n.weight && (!o || !o.weight || n.weight !== o.weight)) {
+            showRivalNotification('weight', notifConfig)
+          }
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'game_state' }, (p) => p.new && setGameState(p.new as GameState))
       .subscribe()
     return () => { supabase.removeChannel(ch) }
-  }, [user, partner, supabase, today, notify])
+  }, [user, partner, gameState, supabase, today, notify])
 
   const saveSchedule = async () => {
     if (!user) return
@@ -811,7 +838,7 @@ export default function Dashboard() {
 
       {/* Peek Panel */}
       <div className={`peek-panel ${peekOpen ? 'open' : ''}`}>
-        <button onClick={() => setPeekOpen(false)} className="absolute top-6 right-6 p-2 hover:bg-[var(--bg-hover)] rounded-full">
+        <button onClick={() => setPeekOpen(false)} className="absolute right-4 p-2 hover:bg-[var(--bg-hover)] rounded-full z-10" style={{ top: 'max(1rem, env(safe-area-inset-top))' }}>
           <X className="w-6 h-6 text-[var(--text-muted)]" />
         </button>
 
