@@ -14,7 +14,7 @@ import { format, differenceInDays, addDays } from 'date-fns'
 interface Profile { id: string; email: string; display_name: string }
 interface Schedule { id: string; user_id: string; gym_days: number[]; calorie_goal: number | null }
 interface Sprint { id: string; user_id: string; goal_title: string; target_value: number; current_value: number; start_value: number; money_on_line: number; sprint_number?: number; start_date: string; end_date: string; status: string }
-interface DailyTask { id: string; user_id: string; date: string; gym_completed: boolean; calories_completed: boolean; weight: number | null }
+interface DailyTask { id: string; user_id: string; date: string; gym_completed: boolean; calories_completed: boolean; weight: number | null; current_calories: number }
 interface GameState { id: number; pot_amount: number }
 
 const DAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
@@ -41,7 +41,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'you'>('dashboard')
   const [peekOpen, setPeekOpen] = useState(false)
   const [notification, setNotification] = useState<string | null>(null)
-  const [modal, setModal] = useState<'schedule' | 'sprint' | 'weight' | 'edit-day' | 'planning' | 'settings' | null>(null)
+  const [modal, setModal] = useState<'schedule' | 'sprint' | 'weight' | 'edit-day' | 'planning' | 'settings' | 'calorie-add' | null>(null)
   const [editingDate, setEditingDate] = useState<string | null>(null)
   const [editGym, setEditGym] = useState(false)
   const [editCalories, setEditCalories] = useState(false)
@@ -52,6 +52,7 @@ export default function Dashboard() {
   const [targetValue, setTargetValue] = useState('')
   const [moneyOnLine, setMoneyOnLine] = useState('25')
   const [weightInput, setWeightInput] = useState('')
+  const [calorieInput, setCalorieInput] = useState<number>(0)
   const [saving, setSaving] = useState(false)
 
   const today = format(new Date(), 'yyyy-MM-dd')
@@ -337,6 +338,69 @@ export default function Dashboard() {
     setSaving(false)
   }
 
+  const addCalories = async () => {
+    if (!user || !schedule?.calorie_goal || calorieInput === 0) return
+    setSaving(true)
+
+    try {
+      // Ensure today's task exists
+      let task = todayTask
+      if (!task) {
+        const { data: newTask, error: createError } = await supabase
+          .from('daily_tasks')
+          .insert({
+            user_id: user.id,
+            date: today,
+            gym_completed: false,
+            calories_completed: false,
+            current_calories: 0
+          })
+          .select()
+          .single()
+
+        if (createError) throw createError
+        task = newTask
+        setTodayTask(newTask)
+      }
+
+      if (!task) throw new Error('No task available')
+
+      const current = task.current_calories || 0
+      const newAmount = Math.max(0, current + calorieInput)
+      const goal = schedule.calorie_goal
+      const completed = newAmount >= goal
+
+      const { data, error } = await supabase
+        .from('daily_tasks')
+        .update({
+          current_calories: newAmount,
+          calories_completed: completed
+        })
+        .eq('id', task.id)
+        .select()
+        .single()
+
+      if (error) throw error
+
+      setTodayTask(data)
+      setAllTasks(prev => prev.map(t => t.id === data.id ? data : t))
+      setWeekTasks(prev => prev.map(t => t.id === data.id ? data : t))
+
+      if (completed && !task.calories_completed) {
+        notify('Daily calorie goal met! 🔥')
+      } else {
+        notify(`Added ${calorieInput} cals`)
+      }
+    } catch (err) {
+      console.error(err)
+      notify('Failed to add calories')
+    }
+
+    setModal(null)
+    setCalorieInput(0)
+    setSaving(false)
+  }
+
   // Calculate partner stats for rival panel
   const getPartnerStats = () => {
     const last7Days: string[] = []
@@ -449,11 +513,27 @@ export default function Dashboard() {
                 )}
 
                 {hasCal && (
-                  <button onClick={() => toggle('calories')} className={`task-btn ${todayTask?.calories_completed ? 'done-accent' : ''}`}>
-                    {todayTask?.calories_completed ? <CheckCircle className="w-6 h-6 text-[var(--accent)]" /> : <Circle className="w-6 h-6 text-[var(--text-muted)]" />}
-                    <Flame className="w-5 h-5 text-[var(--accent)]" />
-                    <span className="text-lg font-medium">{schedule.calorie_goal?.toLocaleString()} calories</span>
-                  </button>
+                  <div className="p-4 bg-[var(--bg-card)] rounded-xl border border-[var(--border)]">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <div className={`p-1 rounded-full ${todayTask?.calories_completed ? 'bg-[var(--accent)] text-[var(--bg-void)]' : 'bg-[var(--bg-layer-1)] text-[var(--text-muted)]'}`}>
+                          <Flame className="w-4 h-4" />
+                        </div>
+                        <span className="font-medium">Calories</span>
+                      </div>
+                      <span className="text-sm font-medium text-[var(--accent)]">
+                        {todayTask?.current_calories || 0} / {schedule.calorie_goal}
+                      </span>
+                    </div>
+                    <div className="progress-track mb-3">
+                      <div className="progress-fill progress-fill-accent" style={{
+                        width: `${Math.min(100, ((todayTask?.current_calories || 0) / (schedule.calorie_goal || 1)) * 100)}%`
+                      }} />
+                    </div>
+                    <button onClick={() => { setCalorieInput(0); setModal('calorie-add'); }} className="btn btn-sm w-full bg-[var(--accent)]/10 text-[var(--accent)] hover:bg-[var(--accent)]/20 border-0">
+                      + Add Cals
+                    </button>
+                  </div>
                 )}
 
                 <button onClick={() => setModal('weight')} className="task-btn">
@@ -584,6 +664,10 @@ export default function Dashboard() {
                   }
                 }
 
+                // Calorie stats
+                const totalCals = last7Tasks.reduce((sum, t) => sum + (t.current_calories || 0), 0)
+                const avgCals = last7Tasks.length > 0 ? Math.floor(totalCals / last7Tasks.length) : 0
+
                 // Calorie streak
                 let calorieStreak = 0
                 const sortedTasks = [...allTasks].sort((a, b) => b.date.localeCompare(a.date))
@@ -612,6 +696,11 @@ export default function Dashboard() {
                       <p className="text-xs text-[var(--text-dim)]">Calorie streak</p>
                     </div>
                     <div className="stat-card">
+                      <Flame className="w-6 h-6 text-[var(--accent)] mb-2 mx-auto" />
+                      <p className="text-3xl font-bold">{avgCals}</p>
+                      <p className="text-xs text-[var(--text-dim)]">Avg cals/day</p>
+                    </div>
+                    <div className="stat-card">
                       <TrendingUp className="w-6 h-6 text-[var(--teal)] mb-2 mx-auto" />
                       <p className="text-3xl font-bold">{gymStreak}</p>
                       <p className="text-xs text-[var(--text-dim)]">Gym streak</p>
@@ -624,6 +713,38 @@ export default function Dashboard() {
                   </>
                 )
               })()}
+            </div>
+
+            {/* Calorie Graph */}
+            <div className="mb-8">
+              <h2 className="text-lg font-semibold mb-4">Calorie History</h2>
+              <div className="h-40 flex items-end gap-1">
+                {(() => {
+                  const data = allTasks.slice(0, 14).reverse()
+                  if (data.length === 0) return <p className="text-[var(--text-dim)] text-sm w-full text-center py-12">No data yet</p>
+
+                  const maxVal = Math.max(...data.map(d => d.current_calories || 0), schedule?.calorie_goal || 2000)
+
+                  return data.map((t, i) => {
+                    const height = ((t.current_calories || 0) / maxVal) * 100
+                    const isGoal = schedule?.calorie_goal && (t.current_calories || 0) >= schedule.calorie_goal
+
+                    return (
+                      <div key={i} className="flex-1 flex flex-col items-center gap-1 group relative">
+                        <div
+                          className={`w-full rounded-t ${isGoal ? 'bg-[var(--accent)]' : 'bg-[var(--bg-layer-1)]'}`}
+                          style={{ height: `${Math.max(4, height)}%` }}
+                        />
+                        <span className="text-[8px] text-[var(--text-muted)]">{format(new Date(t.date), 'd')}</span>
+                        {/* Tooltip */}
+                        <div className="absolute bottom-full mb-2 bg-[var(--bg-card)] border border-[var(--border)] px-2 py-1 rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">
+                          {t.current_calories || 0} cals
+                        </div>
+                      </div>
+                    )
+                  })
+                })()}
+              </div>
             </div>
 
             {/* Weight Graph */}
@@ -708,9 +829,17 @@ export default function Dashboard() {
               </div>
             )}
             {partnerSchedule?.calorie_goal && (
-              <div className={`flex items-center gap-3 p-3 rounded-lg ${partnerTask?.calories_completed ? 'bg-[var(--accent)]/15' : 'bg-[var(--bg-card)]'}`}>
-                {partnerTask?.calories_completed ? <CheckCircle className="w-5 h-5 text-[var(--accent)]" /> : <Circle className="w-5 h-5 text-[var(--text-muted)]" />}
-                <span>Calories</span>
+              <div className={`flex flex-col gap-1 p-3 rounded-lg ${partnerTask?.calories_completed ? 'bg-[var(--accent)]/15' : 'bg-[var(--bg-card)]'}`}>
+                <div className="flex items-center gap-3">
+                  {partnerTask?.calories_completed ? <CheckCircle className="w-5 h-5 text-[var(--accent)]" /> : <Circle className="w-5 h-5 text-[var(--text-muted)]" />}
+                  <span>Calories</span>
+                  <span className="ml-auto text-sm text-[var(--text-dim)]">
+                    {partnerTask?.current_calories || 0} / {partnerSchedule.calorie_goal}
+                  </span>
+                </div>
+                <div className="w-full h-1 bg-[var(--bg-void)] rounded-full overflow-hidden mt-1">
+                  <div className="h-full bg-[var(--accent)]" style={{ width: `${Math.min(100, ((partnerTask?.current_calories || 0) / partnerSchedule.calorie_goal) * 100)}%` }} />
+                </div>
               </div>
             )}
             {!partnerSchedule?.gym_days?.includes(dayOfWeek) && !partnerSchedule?.calorie_goal && (
@@ -812,7 +941,7 @@ export default function Dashboard() {
             <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="modal" onClick={e => e.stopPropagation()}>
               <div className="modal-header">
                 <h3 className="text-lg font-semibold">
-                  {modal === 'schedule' ? 'Schedule' : modal === 'sprint' ? 'New Sprint' : modal === 'edit-day' ? 'Edit Day' : modal === 'planning' ? 'Plan Next Sprint' : modal === 'settings' ? 'Settings' : 'Log Weight'}
+                  {modal === 'schedule' ? 'Schedule' : modal === 'sprint' ? 'New Sprint' : modal === 'edit-day' ? 'Edit Day' : modal === 'planning' ? 'Plan Next Sprint' : modal === 'settings' ? 'Settings' : modal === 'calorie-add' ? 'Add Calories' : 'Log Weight'}
                 </h3>
                 <button onClick={() => setModal(null)} className="p-2 hover:bg-[var(--bg-hover)] rounded-full"><X className="w-5 h-5" /></button>
               </div>
@@ -955,6 +1084,36 @@ export default function Dashboard() {
                     >
                       <LogOut className="w-4 h-4" />
                       Log Out
+                    </button>
+                  </>
+                )}
+                {modal === 'calorie-add' && (
+                  <>
+                    <div className="flex items-center justify-center text-4xl font-bold mb-8 text-[var(--accent)]">
+                      +{calorieInput}
+                      <span className="text-lg text-[var(--text-dim)] font-normal ml-2">cals</span>
+                    </div>
+
+                    <input
+                      type="range"
+                      min="0"
+                      max="1500"
+                      step="10"
+                      value={calorieInput}
+                      onChange={e => setCalorieInput(Number(e.target.value))}
+                      className="w-full h-2 bg-[var(--bg-layer-1)] rounded-lg appearance-none cursor-pointer mb-8 accent-[var(--accent)]"
+                    />
+
+                    <div className="grid grid-cols-4 gap-2 mb-6">
+                      {[100, 250, 500, 800].map(v => (
+                        <button key={v} onClick={() => setCalorieInput(v)} className="py-2 bg-[var(--bg-card)] rounded-lg text-sm hover:bg-[var(--bg-hover)]">
+                          {v}
+                        </button>
+                      ))}
+                    </div>
+
+                    <button onClick={addCalories} disabled={calorieInput === 0 || saving} className="btn btn-primary w-full">
+                      {saving ? 'Adding...' : 'Add Calories'}
                     </button>
                   </>
                 )}
