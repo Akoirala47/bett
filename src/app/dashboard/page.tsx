@@ -10,7 +10,7 @@ import {
   Dumbbell, Flame, Bell, Scale, TrendingUp, Zap, Home, User
 } from 'lucide-react'
 import { format, differenceInDays, addDays } from 'date-fns'
-import { requestNotificationPermission, showRivalNotification } from '@/lib/notifications'
+import { showRivalNotification, registerServiceWorker, subscribeToPush, getSubscriptionData } from '@/lib/notifications'
 
 interface Profile { id: string; email: string; display_name: string }
 interface Schedule { id: string; user_id: string; gym_days: number[]; calorie_goal: number | null }
@@ -206,29 +206,34 @@ export default function Dashboard() {
     const ch = supabase.channel('rt')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_tasks', filter: `user_id=eq.${partner.id}` }, (p) => {
         const n = p.new as DailyTask, o = p.old as DailyTask
+        console.log('🔔 Realtime update received:', { new: n, old: o, today })
         if (n?.date === today) {
           setPartnerTask(n)
           const notifConfig = { rivalName: partner.display_name, betAmount: gameState.pot_amount }
 
           // Gym completed
           if (o && !o.gym_completed && n.gym_completed) {
+            console.log('🏋️ Gym completed - sending notification')
             notify(`${partner.display_name} hit the gym!`)
             showRivalNotification('gym', notifConfig)
           }
 
           // Calories completed
           if (o && !o.calories_completed && n.calories_completed) {
+            console.log('🔥 Calories completed - sending notification')
             notify(`${partner.display_name} hit calories!`)
             showRivalNotification('calories', notifConfig)
           }
 
           // Calories added (even if not completed)
           if (o && (n.current_calories || 0) > (o.current_calories || 0)) {
+            console.log('📊 Calories added - sending notification')
             showRivalNotification('calories', notifConfig)
           }
 
           // Weight logged
           if (n.weight && (!o || !o.weight || n.weight !== o.weight)) {
+            console.log('⚖️ Weight logged - sending notification')
             showRivalNotification('weight', notifConfig)
           }
         }
@@ -530,9 +535,37 @@ export default function Dashboard() {
             </div>
             <button
               onClick={async () => {
-                const granted = await requestNotificationPermission()
-                setNotifPermission(granted ? 'granted' : 'denied')
-                if (granted) notify('Notifications enabled! 🔔')
+                if (!user) return
+                try {
+                  // Register service worker and subscribe to push
+                  const registration = await registerServiceWorker()
+                  if (!registration) {
+                    notify('Push notifications not supported')
+                    setNotifPermission('unsupported')
+                    return
+                  }
+
+                  const subscription = await subscribeToPush(registration)
+                  if (!subscription) {
+                    notify('Please allow notifications')
+                    setNotifPermission('denied')
+                    return
+                  }
+
+                  // Save subscription to database
+                  const subData = getSubscriptionData(subscription)
+                  await supabase.from('push_subscriptions').upsert({
+                    user_id: user.id,
+                    endpoint: subData.endpoint,
+                    keys: subData.keys
+                  }, { onConflict: 'user_id' })
+
+                  setNotifPermission('granted')
+                  notify('Push notifications enabled! 🔔')
+                } catch (err) {
+                  console.error('Failed to enable push:', err)
+                  notify('Failed to enable notifications')
+                }
               }}
               className="btn btn-primary text-sm px-4 py-2 whitespace-nowrap"
             >

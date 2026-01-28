@@ -157,3 +157,84 @@ export function showRivalNotification(
         notification.close()
     }
 }
+
+// VAPID public key for Web Push
+const VAPID_PUBLIC_KEY = 'BIEZejgefPzGEp_S8yS4UL6RUE5woqR_KRqG-Oo2mGzSMaeUBBa32vDYIP3_CfIXnst3RctIDB-_WWJe_fPVz90'
+
+// Convert VAPID key to Uint8Array for subscription
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4)
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+    const rawData = window.atob(base64)
+    const outputArray = new Uint8Array(rawData.length)
+    for (let i = 0; i < rawData.length; ++i) {
+        outputArray[i] = rawData.charCodeAt(i)
+    }
+    return outputArray
+}
+
+// Register service worker
+export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
+    if (!('serviceWorker' in navigator)) {
+        console.log('Service worker not supported')
+        return null
+    }
+
+    try {
+        const registration = await navigator.serviceWorker.register('/sw.js')
+        console.log('Service worker registered:', registration)
+        return registration
+    } catch (error) {
+        console.error('Service worker registration failed:', error)
+        return null
+    }
+}
+
+// Subscribe to Web Push notifications
+export async function subscribeToPush(
+    registration: ServiceWorkerRegistration
+): Promise<PushSubscription | null> {
+    try {
+        // Check if already subscribed
+        let subscription = await registration.pushManager.getSubscription()
+
+        if (subscription) {
+            console.log('Already subscribed to push')
+            return subscription
+        }
+
+        // Request notification permission first
+        const permission = await Notification.requestPermission()
+        if (permission !== 'granted') {
+            console.log('Notification permission denied')
+            return null
+        }
+
+        // Subscribe to push
+        subscription = await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as BufferSource
+        })
+
+        console.log('Push subscription created:', subscription)
+        return subscription
+    } catch (error) {
+        console.error('Push subscription failed:', error)
+        return null
+    }
+}
+
+// Get push subscription data to save to database
+export function getSubscriptionData(subscription: PushSubscription): {
+    endpoint: string
+    keys: { p256dh: string; auth: string }
+} {
+    const json = subscription.toJSON()
+    return {
+        endpoint: subscription.endpoint,
+        keys: {
+            p256dh: json.keys?.p256dh || '',
+            auth: json.keys?.auth || ''
+        }
+    }
+}
