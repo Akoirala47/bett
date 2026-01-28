@@ -42,6 +42,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'you'>('dashboard')
   const [peekOpen, setPeekOpen] = useState(false)
   const [notification, setNotification] = useState<string | null>(null)
+  const [notifPermission, setNotifPermission] = useState<'granted' | 'denied' | 'default' | 'unsupported'>('default')
   const [modal, setModal] = useState<'schedule' | 'sprint' | 'weight' | 'edit-day' | 'planning' | 'settings' | 'calorie-add' | null>(null)
   const [editingDate, setEditingDate] = useState<string | null>(null)
   const [editGym, setEditGym] = useState(false)
@@ -191,9 +192,13 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase, router, today])
 
-  // Request notification permission on mount
+  // Check notification permission on mount
   useEffect(() => {
-    requestNotificationPermission()
+    if (!('Notification' in window)) {
+      setNotifPermission('unsupported')
+    } else {
+      setNotifPermission(Notification.permission as 'granted' | 'denied' | 'default')
+    }
   }, [])
 
   useEffect(() => {
@@ -511,6 +516,31 @@ export default function Dashboard() {
           </div>
         </div>
       </header>
+
+      {/* Notification Permission Banner */}
+      {notifPermission === 'default' && (
+        <div className="container mt-4">
+          <div className="p-4 rounded-xl bg-[var(--accent)]/10 border border-[var(--accent)]/30 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <Bell className="w-6 h-6 text-[var(--accent)]" />
+              <div>
+                <p className="font-medium text-sm">Get notified when your rival makes progress</p>
+                <p className="text-xs text-[var(--text-dim)]">Don&apos;t let them get ahead!</p>
+              </div>
+            </div>
+            <button
+              onClick={async () => {
+                const granted = await requestNotificationPermission()
+                setNotifPermission(granted ? 'granted' : 'denied')
+                if (granted) notify('Notifications enabled! 🔔')
+              }}
+              className="btn btn-primary text-sm px-4 py-2 whitespace-nowrap"
+            >
+              Enable
+            </button>
+          </div>
+        </div>
+      )}
 
       {activeTab === 'dashboard' ? (
         <main
