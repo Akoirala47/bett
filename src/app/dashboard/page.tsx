@@ -65,6 +65,31 @@ export default function Dashboard() {
     setTimeout(() => setNotification(null), 3000)
   }, [])
 
+  // Send push notification to rival via Edge Function
+  const notifyRival = useCallback(async (type: 'gym' | 'calories' | 'weight') => {
+    if (!partner || !user || !gameState) return
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+      const response = await fetch(`${supabaseUrl}/functions/v1/send-push`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({
+          rival_user_id: partner.id,
+          type,
+          actor_name: user.display_name,
+          bet_amount: gameState.pot_amount
+        })
+      })
+      const result = await response.json()
+      console.log('Push notification result:', result)
+    } catch (err) {
+      console.error('Failed to send rival notification:', err)
+    }
+  }, [partner, user, gameState])
+
   const load = async (uid: string) => {
     // First: Get user profile (required for everything else)
     let { data: p } = await supabase.from('profiles').select('*').eq('id', uid).single()
@@ -304,35 +329,53 @@ export default function Dashboard() {
 
   const toggle = async (type: 'gym' | 'calories') => {
     if (!user) return
+    const isCompleting = type === 'gym' ? !todayTask?.gym_completed : !todayTask?.calories_completed
     const { data } = await supabase.from('daily_tasks').upsert({
       user_id: user.id, date: today,
       gym_completed: type === 'gym' ? !todayTask?.gym_completed : (todayTask?.gym_completed || false),
       calories_completed: type === 'calories' ? !todayTask?.calories_completed : (todayTask?.calories_completed || false),
       weight: todayTask?.weight || null
     }, { onConflict: 'user_id,date' }).select().single()
-    if (data) setTodayTask(data)
+    if (data) {
+      setTodayTask(data)
+      // Notify rival when completing (not when un-completing)
+      if (isCompleting) {
+        notifyRival(type)
+      }
+    }
   }
 
   const saveWeight = async () => {
     if (!user || !weightInput) return
     setSaving(true)
-    const w = parseFloat(weightInput)
-    const { data } = await supabase.from('daily_tasks').upsert({
-      user_id: user.id, date: today,
-      gym_completed: todayTask?.gym_completed || false,
-      calories_completed: todayTask?.calories_completed || false,
-      weight: w
-    }, { onConflict: 'user_id,date' }).select().single()
-    if (data) {
-      setTodayTask(data)
-      if (sprint) {
-        await supabase.from('sprints').update({ current_value: w }).eq('id', sprint.id)
-        setSprint({ ...sprint, current_value: w })
+    try {
+      const w = parseFloat(weightInput)
+      const { data, error } = await supabase.from('daily_tasks').upsert({
+        user_id: user.id, date: today,
+        gym_completed: todayTask?.gym_completed || false,
+        calories_completed: todayTask?.calories_completed || false,
+        weight: w
+      }, { onConflict: 'user_id,date' }).select().single()
+
+      if (error) throw error
+
+      if (data) {
+        setTodayTask(data)
+        if (sprint) {
+          await supabase.from('sprints').update({ current_value: w }).eq('id', sprint.id)
+          setSprint({ ...sprint, current_value: w })
+        }
+        notify(`Weight logged: ${w} lbs ✓`)
+        notifyRival('weight')
       }
+    } catch (err) {
+      console.error('Failed to save weight:', err)
+      notify('Failed to save weight')
+    } finally {
       setModal(null)
       setWeightInput('')
+      setSaving(false)
     }
-    setSaving(false)
   }
 
   const openEditDay = (date: string) => {

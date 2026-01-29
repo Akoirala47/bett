@@ -1,0 +1,2 @@
+# Ignore Supabase Functions directory (uses Deno, not Node)
+supabase/

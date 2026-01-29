@@ -295,8 +295,9 @@ body {
 
 /* Peek Panel */
 .peek-panel {
-  @apply fixed right-0 top-0 bottom-0 w-[340px] bg-[var(--bg-layer-2)] border-l border-[var(--glass-border)] p-6 pt-20 z-50 transition-transform duration-300;
+  @apply fixed right-0 top-0 bottom-0 w-[340px] bg-[var(--bg-layer-2)] border-l border-[var(--glass-border)] p-6 pt-20 z-50 transition-transform duration-300 overflow-y-auto;
   backdrop-filter: blur(20px);
+  padding-bottom: calc(2rem + env(safe-area-inset-bottom));
 }
 
 .peek-panel:not(.open) {
